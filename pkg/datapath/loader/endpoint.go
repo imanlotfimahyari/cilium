@@ -24,6 +24,7 @@ import (
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
 	"github.com/cilium/cilium/pkg/datapath/loader/metrics"
 	"github.com/cilium/cilium/pkg/datapath/tables"
+	"github.com/cilium/cilium/pkg/datapath/vtep/returnaffinity"
 	endpoint "github.com/cilium/cilium/pkg/endpoint/types"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maps/callsmap"
@@ -109,13 +110,25 @@ func (l *loader) ReloadDatapath(ctx context.Context, ep endpoint.Endpoint, lnc *
 
 	// Reload an lxc endpoint program.
 	stats.BpfLoadProg.Start()
-	err = reloadEndpoint(ctx, l.logger, l.registry, l.bpfCollectionLoader, l.db, l.devices, l.routeManager, ep, lnc, spec)
+	err = reloadEndpoint(ctx, l.logger, l.registry, l.bpfCollectionLoader, l.db, l.devices, l.routeManager, l.affinity, ep, lnc, spec)
 	stats.BpfLoadProg.End(err == nil)
 	return hash, err
 }
 
 // Unload removes the datapath specific program aspects
 func (l *loader) Unload(ep endpoint.Endpoint) {
+	if ep.GetPropertyValue(endpoint.PropertyVTEPReturnAffinity) == true {
+		if l.affinity == nil {
+			l.logger.Error("Missing VTEP controller during endpoint retirement")
+			return
+		}
+		if err := l.affinity.Retire(ep.GetEndpointNetNsCookie()); err != nil {
+			// Retain the endpoint's strict programs if the independent guard
+			// cannot be installed. Never expose a legacy routing gap.
+			l.logger.Error("Could not retire VTEP endpoint; retaining strict attachments", "error", err)
+			return
+		}
+	}
 	if ep.RequireEndpointRoute() {
 		if ip := ep.IPv4Address(); ip.IsValid() {
 			removeEndpointRoute(ep, l.routeManager)
@@ -194,13 +207,36 @@ func defaultEndpointMapRenames(ep endpoint.Config, lnc *config.Config) map[strin
 // it if necessary.
 func reloadEndpoint(ctx context.Context, logger *slog.Logger, reg *registry.MapRegistry, collLoader *bpfCollectionLoader,
 	db *statedb.DB, devices statedb.Table[*tables.Device], rm *routeReconciler.DesiredRouteManager,
-	ep endpoint.Endpoint, lnc *config.Config, spec *ebpf.CollectionSpec) error {
+	affinity *returnaffinity.Controller, ep endpoint.Endpoint, lnc *config.Config, spec *ebpf.CollectionSpec) error {
+	selected := ep.GetPropertyValue(endpoint.PropertyVTEPReturnAffinity) == true
+	var replacements map[string]*ebpf.Map
+	if selected {
+		if affinity == nil || !affinity.Enabled() {
+			return fmt.Errorf("selected VTEP endpoint requires enabled socket controller")
+		}
+		r, err := affinityRegistration(ep)
+		if err != nil {
+			return err
+		}
+		if err := affinity.Prepare(r); err != nil {
+			return err
+		}
+		replacements, err = affinity.MapReplacements(spec)
+		if err != nil {
+			return err
+		}
+	} else if affinity != nil {
+		if err := affinity.ValidateLegacyNamespace(ep.GetEndpointNetNsCookie()); err != nil {
+			return err
+		}
+	}
 
 	var obj lxcObjects
 	commit, cleanup, err := collLoader.LoadAndAssign(ctx, logger, &obj, spec, &bpf.CollectionOptions{
 		MapRegistry: reg,
 		CollectionOptions: ebpf.CollectionOptions{
-			Maps: ebpf.MapOptions{PinPath: bpf.TCGlobalsPath()},
+			Maps:            ebpf.MapOptions{PinPath: bpf.TCGlobalsPath()},
+			MapReplacements: replacements,
 		},
 		Constants:      endpointConfiguration(ep, lnc),
 		MapRenames:     endpointMapRenames(ep, lnc),
@@ -270,6 +306,9 @@ func reloadEndpoint(ctx context.Context, logger *slog.Logger, reg *registry.MapR
 		}
 	}
 
+	if selected {
+		return affinity.Commit(ep.GetEndpointNetNsCookie())
+	}
 	return nil
 }
 

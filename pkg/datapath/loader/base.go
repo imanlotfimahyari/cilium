@@ -342,6 +342,11 @@ func (l *loader) Reinitialize(ctx context.Context, lnc *config.Config, tunnelCon
 	if err := bpf.MkdirBPF(bpf.TCGlobalsPath()); err != nil {
 		return fmt.Errorf("failed to create bpffs directory: %w", err)
 	}
+	// Validate restore/disable and install the node socket hook before base
+	// programs or synchronous CNI endpoint builds can become reachable.
+	if err := l.initializeVTEPReturn(ctx, lnc, tunnelConfig); err != nil {
+		return err
+	}
 
 	// Datapath initialization
 	hostDev1, _, err := setupBaseDevice(l.logger, l.sysctl, lnc.DeviceMTU)

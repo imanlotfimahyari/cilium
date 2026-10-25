@@ -113,7 +113,12 @@ func (*templateCfg) GetRTInfo() (uint32, eptypes.RTInfoEncoding) {
 	return 0, eptypes.RTInfoNone
 }
 
-func (*templateCfg) GetPropertyValue(key string) any {
+func (t *templateCfg) GetPropertyValue(key string) any {
+	if key == eptypes.PropertyVTEPReturnAffinity {
+		if p, ok := t.CompileTimeConfig.(interface{ GetPropertyValue(string) any }); ok {
+			return p.GetPropertyValue(key)
+		}
+	}
 	return nil
 }
 
