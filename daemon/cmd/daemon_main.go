@@ -721,6 +721,8 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 
 	flags.Bool(option.EnableVTEP, defaults.EnableVTEP, "Enable  VXLAN Tunnel Endpoint (VTEP) Integration (beta)")
 	option.BindEnv(vp, option.EnableVTEP)
+	flags.Bool(option.EnableExperimentalVTEPReturnAffinity, false, "Experimental IPv4/TCP VXLAN socket and TIME-WAIT return affinity for new synchronous CNI veth endpoints; requires compatible kernel BTF/tracing")
+	option.BindEnv(vp, option.EnableExperimentalVTEPReturnAffinity)
 
 	flags.String(option.VtepMask, "255.255.255.0", "VTEP CIDR Mask for all VTEP CIDRs")
 	option.BindEnv(vp, option.VtepMask)
