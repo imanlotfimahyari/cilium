@@ -303,6 +303,10 @@ func (h *HeaderfileWriter) WriteEndpointConfig(w io.Writer, e endpoint.Config) e
 
 	writeIncludes(w)
 	h.writeNetdevConfig(fw, e.GetOptions())
+	if e.GetPropertyValue(endpoint.PropertyVTEPReturnAffinity) == true {
+		fmt.Fprintln(fw, "#define ENABLE_VTEP_RETURN_SOCKET_AFFINITY 1")
+		fmt.Fprintln(fw, "#define ENABLE_VTEP_RETURN_TIMEWAIT_AFFINITY 1")
+	}
 	return fw.Flush()
 }
 
@@ -310,5 +314,9 @@ func (h *HeaderfileWriter) WriteEndpointConfig(w io.Writer, e endpoint.Config) e
 func (h *HeaderfileWriter) WriteTemplateConfig(w io.Writer, e endpoint.Config) error {
 	fw := bufio.NewWriter(w)
 	h.writeNetdevConfig(fw, e.GetOptions())
+	if e.GetPropertyValue(endpoint.PropertyVTEPReturnAffinity) == true {
+		fmt.Fprintln(fw, "#define ENABLE_VTEP_RETURN_SOCKET_AFFINITY 1")
+		fmt.Fprintln(fw, "#define ENABLE_VTEP_RETURN_TIMEWAIT_AFFINITY 1")
+	}
 	return fw.Flush()
 }
