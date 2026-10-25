@@ -181,7 +181,9 @@ func (e *Endpoint) writeHeaderfile(prefix string) error {
 		return err
 	}
 
-	if err = e.orchestrator.WriteEndpointConfig(f, e); err != nil {
+	// Header generation runs with e.mutex held. Property readers used by the
+	// config writer must use the immutable snapshot rather than re-locking e.
+	if err = e.orchestrator.WriteEndpointConfig(f, e.createEpInfoCache(prefix)); err != nil {
 		return err
 	}
 
