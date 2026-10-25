@@ -12,6 +12,7 @@ import (
 	"github.com/cilium/hive/job"
 	"github.com/spf13/pflag"
 
+	"github.com/cilium/cilium/pkg/datapath/vtep/returnaffinity"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/mac"
 	"github.com/cilium/cilium/pkg/maps/vtep"
@@ -30,6 +31,7 @@ var Cell = cell.Module(
 		VTEPMAC:          []string{},
 	}),
 	cell.Invoke(newVTEPManager),
+	returnaffinity.Cell,
 )
 
 type vtepManagerParams struct {
@@ -39,8 +41,9 @@ type vtepManagerParams struct {
 	Lifecycle cell.Lifecycle
 	JobGroup  job.Group
 
-	VTEPMap vtep.Map
-	Config  config
+	VTEPMap  vtep.Map
+	Config   config
+	Affinity *returnaffinity.Controller
 }
 
 func newVTEPManager(params vtepManagerParams) error {
@@ -51,6 +54,16 @@ func newVTEPManager(params vtepManagerParams) error {
 	validatedConfig, err := params.Config.validatedConfig()
 	if err != nil {
 		return fmt.Errorf("invalid vtep config: %w", err)
+	}
+	if params.Affinity != nil {
+		peers := make([]returnaffinity.Peer, len(validatedConfig.vtepEndpoints))
+		for i, p := range validatedConfig.vtepEndpoints {
+			peers[i].Address = p.As4()
+			copy(peers[i].MAC[:], validatedConfig.vtepMACs[i][:])
+		}
+		if err := params.Affinity.ConfigurePeers(peers); err != nil {
+			return err
+		}
 	}
 
 	mgr := &vtepManager{
