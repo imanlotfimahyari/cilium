@@ -600,6 +600,12 @@ func (d *statusCollector) GetStatus(brief bool, requireK8sConnectivity bool) mod
 	// CiliumVersion definition
 	ver := version.GetCiliumVersion()
 	ciliumVer := fmt.Sprintf("%s (v%s-%s)", ver.Version, ver.Version, ver.Revision)
+	if affinity := d.statusParams.VTEPReturnAffinity; affinity != nil {
+		if err := affinity.Readiness(); err != nil {
+			sr.Cilium = &models.Status{State: models.StatusStateFailure, Msg: err.Error()}
+			return sr
+		}
+	}
 
 	switch {
 	case !d.allProbesInitialized:
