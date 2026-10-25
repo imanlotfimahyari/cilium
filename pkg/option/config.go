@@ -878,6 +878,9 @@ const (
 	// EnableVTEP enables cilium VXLAN VTEP integration
 	EnableVTEP = "enable-vtep"
 
+	// EnableExperimentalVTEPReturnAffinity selects new synchronous CNI endpoints.
+	EnableExperimentalVTEPReturnAffinity = "enable-experimental-vtep-return-affinity"
+
 	// VTEP CIDR Mask applies to all VtepCIDR
 	VtepMask = "vtep-mask"
 
@@ -1713,7 +1716,8 @@ type DaemonConfig struct {
 	EnableICMPRules bool
 
 	// EnableVTEP enable Cilium VXLAN VTEP integration
-	EnableVTEP bool
+	EnableVTEP                           bool
+	EnableExperimentalVTEPReturnAffinity bool
 
 	// VtepMask VTEP Mask
 	VtepCidrMask netip.Addr
@@ -2798,6 +2802,7 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 
 	// VTEP integration enable option
 	c.EnableVTEP = vp.GetBool(EnableVTEP)
+	c.EnableExperimentalVTEPReturnAffinity = vp.GetBool(EnableExperimentalVTEPReturnAffinity)
 
 	// Support failure-mode for policy map overflow
 	c.EnableEndpointLockdownOnPolicyOverflow = vp.GetBool(EnableEndpointLockdownOnPolicyOverflow)
