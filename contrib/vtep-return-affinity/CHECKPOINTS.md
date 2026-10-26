@@ -46,3 +46,21 @@ The v16 local commits start from that recoverable published baseline:
 
 See VALIDATION-v16.md for executed tests and the gates still open. Compare
 source trees after any browser backup; commit hashes alone will differ.
+
+## v17 actual-agent validation
+
+The recovered v16 baseline is published `f4d987348c1d81af78311baad9a805b8f9ff78d5`,
+tree `cf7b93662972439a3da0c0475341eb43b8cf97bc`, matching the original local
+v16 checkpoint `f08a3944`.
+
+Local `aafd68daa0bd247137706c3d8c3d51cee39de26c` adds the two-version agent
+fixture, isolated artifact packaging, binary/source fingerprints and required
+transition evidence. Its source tree `83606c29e8a578cedbd6587aaf347e92391e0548`
+was verified byte-for-byte against published
+`d4f349cba28bf3c370cea33653e34c0754bde149` before further work.
+
+The subsequent rejected-startup assertion requires the old agent's specific
+unsupported-hook diagnostic and failed readiness, since base-datapath retries
+do not necessarily terminate the process. See VALIDATION-v17.md for the final
+executed evidence and its limits. Historical v16 reports retain their original
+scope; v17 adds actual-agent evidence rather than relabeling older tests.

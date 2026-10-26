@@ -1,5 +1,13 @@
 # Experimental IPv4/TCP VXLAN return affinity
 
+**v17:** actual-agent lifecycle validation now passes on Linux 6.8 and 6.12.
+Linux 6.8 preserves live TCP/TIME-WAIT and every managed map/link ID across
+v15 -> v16 -> v15. Linux 6.12 safely rejects the unsupported v15 initialization,
+reports failed readiness and recovers with v16 without replacing live state.
+Both runs include pod replacement and drain/disable. This is compatibility
+evidence for those prototype checkpoints, not arbitrary released versions.
+See [v17 validation and remaining gates](VALIDATION-v17.md).
+
 **v16:** strict recovery decoding rejects ambiguous/future JSON and oversized
 inputs without rewriting history. Reviewed BTF signatures select the TIME-WAIT
 publication point on Linux 6.8 and 6.12 without adding hooks or changing maps.
@@ -263,6 +271,9 @@ v16. Require
 `TestPrivilegedRealAgentProcess/unsupported_previous_agent_refuses_without_replacing_live_graph`.
 A failure for an unrelated reason does not satisfy that test. The compatible
 mode is not a promise that arbitrary Cilium versions can reuse this experiment.
+The unsupported older agent may keep retrying base-datapath initialization;
+the fixture requires its exact hook error and failed return-affinity readiness,
+then stops it before testing recovery. A running process is not a ready agent.
 
 Both modes must also pass the root lifecycle test, real packet/TIME-WAIT checks,
 unsafe-disable refusal and coordinated drain/disable. Reports fingerprint both
