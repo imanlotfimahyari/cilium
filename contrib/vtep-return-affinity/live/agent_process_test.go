@@ -704,8 +704,41 @@ func refuseUnsafeDisable(t *testing.T, f *handoffFixture, previous *agentProcess
 func refusePreviousAgent(t *testing.T, f *handoffFixture, running *agentProcess, version agentVersion) {
 	t.Helper()
 	stageAgentSource(t, version)
-	runRefusedAgent(t, f, version.Binary, running.cmd.Env, running.cmd.Args[1:],
-		running.logPath+".previous-refusal", 3*time.Minute, "fentry inet_twsk_hashdance not supported")
+	logPath := running.logPath + ".previous-refusal"
+	log, err := os.Create(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	cmd := exec.Command(version.Binary, running.cmd.Args[1:]...)
+	cmd.Env = running.cmd.Env
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(log, os.Stdout), io.MultiWriter(log, os.Stdout)
+	if err := f.router.Do(func() error { return cmd.Start() }); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	defer func() { cmd.Process.Kill(); <-done }()
+	// Base-datapath initialization retries on failure; refusal need not exit
+	// the daemon. Require the specific kernel error and explicit failed health.
+	probe := *running
+	probe.client = &http.Client{Timeout: 5 * time.Second, Transport: running.client.Transport}
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "fentry inet_twsk_hashdance not supported") {
+			var health models.StatusResponse
+			if err := probe.request("GET", "/healthz", nil, &health); err == nil && health.Cilium != nil &&
+				health.Cilium.State == models.StatusStateFailure && strings.Contains(health.Cilium.Msg, "return-affinity runtime is not ready") {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("previous agent did not reject initialization with failed readiness\n%s", agentLogTail(logPath))
 }
 
 func runRefusedAgent(t *testing.T, f *handoffFixture, binary string, env, args []string, logPath string, timeout time.Duration, reason string) {
@@ -731,7 +764,7 @@ func runRefusedAgent(t *testing.T, f *handoffFixture, binary string, env, args [
 	case <-time.After(timeout):
 		cmd.Process.Kill()
 		<-done
-		t.Fatal("unsafe agent transition did not refuse live endpoints")
+		t.Fatalf("unsafe agent transition did not refuse live endpoints\n%s", agentLogTail(logPath))
 	}
 	b, err := os.ReadFile(logPath)
 	if err != nil {
