@@ -1,15 +1,18 @@
-# Agent-managed TIME-WAIT return affinity (v15)
+# Agent-managed TIME-WAIT return affinity (v16)
 
 The existing default-off experimental agent flag now manages this extension.
 The source includes proof consumption after ordinary Cilium policy/CT, complete
 map/hook restoration, periodic proof collection and drain-before-disable.
-Kubernetes remains deferred. Only the Linux 6.8 lab contract is targeted.
+Kubernetes remains deferred. The v16 controller/packet matrix passes on Linux
+6.8 and 6.12; full-daemon lifecycle evidence remains the historical Linux 6.8
+v15 result. See [v16 validation](VALIDATION-v16.md) for exact scope and gaps.
 
 ## Ownership and packet handoff
 
 `bpf/lib/vtep_return_timewait_owner.h` implements two CO-RE hooks:
 
-1. `inet_twsk_hashdance`: before publication, transfer the full socket's immutable
+1. `inet_twsk_hashdance` (6.8) or reviewed `inet_twsk_hashdance_schedule`
+   (6.12), selected after BTF ABI checks: before publication, transfer the full socket's immutable
    owner to the exact kernel TIME-WAIT cookie. Check cookies, IPv4 endpoints,
    ports, origin and namespace generation. The non-evicting map is keyed by the
    globally unique socket cookie, never a tuple.

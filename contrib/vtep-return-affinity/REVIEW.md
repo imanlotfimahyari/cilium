@@ -116,3 +116,44 @@ fields and expansions above 8,192 cookies. It checks only by default and writes
 atomically with `--apply`. This does not establish arbitrary older-Cilium or
 Kubernetes downgrade support. Startup also reads journal contents under the
 lease, eliminating the pre-lease snapshot race. No packet-path code changed.
+
+
+## v16 recovery and compatibility review
+
+The v9 cleanup, exact range compaction and mapped-listener work above were
+already implemented. This pass preserves that single forwarding design.
+
+- Recovery previously used permissive JSON decoding. Unknown fields and
+  duplicate keys could be discarded before history validation. The agent and
+  offline exporter now share strict, size-bounded decoding and refuse without
+  rewriting the original file. Admission history remains capped as before.
+- The metadata invariant remains unchanged: a MAC nonce is an opaque lookup
+  token, never authority. Socket/request incarnation, trusted ingress origin,
+  namespace/generation and normal policy/CT must all agree. Unknown ownership
+  still drops. No tuple-only or prefix-based fallback was added.
+- Linux 6.12 renamed `inet_twsk_hashdance` to
+  `inet_twsk_hashdance_schedule`. Both reviewed entry points expose the same
+  first two live objects before publication. Choose only these names, validate
+  their BTF prototypes, and retain the existing pinned-target/map/tag checks.
+- Raw tracing context indexes also require ABI checks. The packet constructor
+  must retain four arguments and return an skb; a fifth argument must not be
+  mistaken for that return value. Destruction and ACK argument types are
+  checked before loading. This retains six hooks, not a growing hook graph.
+- The two-boot test deliberately preserves an initialized journal while bpffs
+  disappears. Enabled startup must refuse before rewriting that history. Only
+  explicit disabled/drained recovery may establish a fresh boot epoch. This
+  does not recover old connections.
+
+SYN cookies still require a kernel-validated accepted-child binding. A cookie
+ACK observed at TC, a recent SYN, or a reusable tuple alone is insufficient.
+Adding forwarding support needs a separately reviewed handoff with cross-peer
+collision/replay, retransmission, ACK-with-data, expiry, state exhaustion and
+restart tests. Existing forced-cookie tests now cover both listener families
+and the actual Cilium policy/CT fixture; they prove safe rejection, not support.
+
+Reviewed kernel implementation:
+
+- https://github.com/torvalds/linux/blob/v6.12/net/ipv4/inet_timewait_sock.c
+- https://github.com/torvalds/linux/blob/v6.12/net/ipv4/ip_output.c
+- https://github.com/torvalds/linux/blob/v6.12/net/ipv4/tcp_ipv4.c
+- https://github.com/torvalds/linux/blob/v6.12/net/core/skbuff.c

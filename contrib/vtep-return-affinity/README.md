@@ -1,6 +1,13 @@
 # Experimental IPv4/TCP VXLAN return affinity
 
-**v15:** the default-off experiment now detects loss or replacement of every
+**v16:** strict recovery decoding rejects ambiguous/future JSON and oversized
+inputs without rewriting history. Reviewed BTF signatures select the TIME-WAIT
+publication point on Linux 6.8 and 6.12 without adding hooks or changing maps.
+The lab now includes offload modes, loss/retransmission and real two-boot
+controller recovery. See [v16 validation and remaining gates](VALIDATION-v16.md).
+SYN-cookie forwarding and native performance remain open.
+
+**v15:** the default-off experiment detects loss or replacement of every
 canonical map pin, as well as tracing-hook pin damage. It retires selected
 namespace controls and refuses readiness instead of continuing with an
 unrestorable graph. TIME-WAIT tests now exercise the actual Cilium policy/CT
@@ -117,6 +124,9 @@ Adjacent cookies compress, so 100,000 contiguous retired cookies need one range.
 Sparse churn may reach the bound: new registrations then fail explicitly while
 existing history remains intact. Clear history through coordinated drain,
 disable and verified reboot; never erase the journal to bypass recovery checks.
+Recovery input and output are independently capped at 64 MiB. Non-regular
+files, duplicate/case-aliased fields, noncanonical namespace keys, unknown
+fields and trailing JSON are refused; original history is preserved.
 This bounds normal journal growth without assuming every earlier cookie belonged
 to the experiment. Old oversized journals are preserved and block new admissions.
 
@@ -154,8 +164,9 @@ Total peer-state loss cannot transparently recover old connections.
 
 The current privileged runner uses disconnected QEMU/TCG, Linux 6.8.0-31,
 cgroup v2/BTF, veth/TCX/VXLAN and explicit trusted test artifacts. It exposes no
-host filesystem or external network. Results are one kernel/topology, not a
-supported-kernel matrix or native performance measurement.
+host filesystem or external network. Historical v14/v15 results cover one kernel/topology. The v16 controller/packet
+matrix adds Linux 6.12; it is not full-agent/Kubernetes coverage on that kernel
+or a native performance measurement.
 
 The v14 recovery validation passes in three freshly executed VM runs, each
 ending with `VTEP_VM_EXIT=0`: controller lifecycle/faults, packet regressions,

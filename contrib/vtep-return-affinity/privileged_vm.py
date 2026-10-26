@@ -13,6 +13,8 @@ import argparse
 import ctypes
 import ctypes.util
 import gzip
+import hashlib
+import json
 import os
 import re
 from pathlib import Path
@@ -22,6 +24,8 @@ import stat
 import subprocess
 import tempfile
 import time
+
+from validation_results import validate_output
 
 
 def entry(name, mode, data=b"", major=0, minor=0):
@@ -60,6 +64,10 @@ def main():
     p.add_argument("--busybox", type=Path, required=True)
     p.add_argument("--runner", type=Path, required=True)
     p.add_argument("--agent-tests", type=Path)
+    p.add_argument("--agent-test-run", default=".")
+    p.add_argument("--recovery-disk", type=Path,
+                   help="Explicit disposable raw ext4 image, shared only between isolated boots")
+    p.add_argument("--recovery-stage", choices=["prepare", "verify"])
     p.add_argument("--live-tests", type=Path)
     p.add_argument("--socket-object", type=Path)
     p.add_argument("--handoff-object", type=Path)
@@ -74,11 +82,22 @@ def main():
     p.add_argument("--source-bpf", type=Path)
     p.add_argument("--netfilter-root", type=Path)
     p.add_argument("--memory", default="768M")
+    p.add_argument("--accelerator", choices=["tcg", "kvm"], default="tcg",
+                   help="KVM requires /dev/kvm; never falls back silently to emulation")
+    p.add_argument("--require-test", action="append", default=[],
+                   help="Exact Go test name that must pass, including every executed subtest")
+    p.add_argument("--report", type=Path, help="Machine-readable coverage and execution metadata")
     p.add_argument("--bpf-dir", type=Path, required=True)
     p.add_argument("--module-root", type=Path)
     p.add_argument("--log", type=Path, required=True)
     p.add_argument("--timeout", type=int, default=240)
     args = p.parse_args()
+    if args.accelerator == "kvm" and not os.access("/dev/kvm", os.R_OK | os.W_OK):
+        p.error("KVM requested but /dev/kvm is unavailable; native performance validation is blocked")
+    if bool(args.recovery_disk) != bool(args.recovery_stage):
+        p.error("--recovery-disk and --recovery-stage must be supplied together")
+    if args.recovery_disk and not (args.agent_tests and args.runtime_object and args.recovery_disk.is_file()):
+        p.error("recovery requires agent tests, runtime object and an existing disposable regular disk image")
     if args.socket_object and not args.live_tests:
         p.error("--socket-object requires --live-tests")
     if args.handoff_object and not args.live_tests:
@@ -132,23 +151,34 @@ mount -t cgroup2 cgroup2 /sys/fs/cgroup
 mount -t cgroup2 cgroup2 /run/cilium/cgroupv2
 hostname vtep-lab
 ip link set lo up
+__RECOVERY_MOUNT__
 for name in __VM_MODULES__; do
   [ ! -f "/modules/$name.ko" ] || insmod "/modules/$name.ko"
 done
 echo VTEP_VM_TEST_BEGIN
 if [ -f /bpf_vtep_return.o ]; then export VTEP_RETURN_RUNTIME_OBJECT=/bpf_vtep_return.o; fi
 if [ -x /cilium-agent ]; then export VTEP_RETURN_AGENT_BINARY=/cilium-agent; fi
+echo VTEP_SUITE_BEGIN=conntrack
 /bpftest -test.v -test.run '^TestBPF$' -bpf-test-path /bpf -test conntrack_test
 two=$?
+echo VTEP_SUITE_EXIT=conntrack:$two
 core=0
 if [ -f /bpf/tc_vtep_return_core.o ]; then
+  echo VTEP_SUITE_BEGIN=core
   /bpftest -test.v -test.run '^TestBPF$' -bpf-test-path /bpf -test tc_vtep_return_core
   core=$?
+  echo VTEP_SUITE_EXIT=core:$core
 fi
 three=0
-if [ -x /agenttests ]; then PRIVILEGED_TESTS=1 VTEP_RETURN_ISOLATED_VM=1 /agenttests -test.v; three=$?; fi
+if [ -x /agenttests ]; then
+  echo VTEP_SUITE_BEGIN=agent
+  PRIVILEGED_TESTS=1 VTEP_RETURN_ISOLATED_VM=1 /agenttests -test.v -test.run __AGENT_TEST_RUN__
+  three=$?
+  echo VTEP_SUITE_EXIT=agent:$three
+fi
 four=0
 if [ -x /livetest ]; then
+  echo VTEP_SUITE_BEGIN=live
   if [ -f /socket_identity.o ]; then
     export VTEP_RETURN_SOCKET_OBJECT=/socket_identity.o
   fi
@@ -169,13 +199,21 @@ if [ -x /livetest ]; then
   fi
   PRIVILEGED_TESTS=1 VTEP_RETURN_ISOLATED_VM=1 /livetest -test.v -test.run __LIVE_TEST_RUN__
   four=$?
+  echo VTEP_SUITE_EXIT=live:$four
 fi
 result=0
 [ "$two" = 0 ] && [ "$core" = 0 ] && [ "$three" = 0 ] && [ "$four" = 0 ] || result=1
+__RECOVERY_UNMOUNT__
 echo VTEP_VM_EXIT=$result
 poweroff -f
 """
     init = init.replace("__VM_MODULES__", " ".join(modules)).replace("__LIVE_TEST_RUN__", shlex.quote(args.live_test_run))
+    init = init.replace("__AGENT_TEST_RUN__", shlex.quote(args.agent_test_run))
+    init = init.replace("__RECOVERY_MOUNT__", (
+        "mkdir -p /recovery\nmount -t ext4 /dev/vda /recovery || { echo VTEP_VM_EXIT=1; poweroff -f; }\n"
+        "export VTEP_RETURN_RECOVERY_STAGE=" + shlex.quote(args.recovery_stage)
+    ) if args.recovery_disk else "")
+    init = init.replace("__RECOVERY_UNMOUNT__", "sync\numount /recovery || result=1" if args.recovery_disk else "")
     with tempfile.TemporaryDirectory(prefix="cilium-vtep-vm-") as tmp:
         archive = Path(tmp) / "tests.cpio.gz"
         with gzip.open(archive, "wb", compresslevel=1) as out:
@@ -247,13 +285,19 @@ poweroff -f
         env["QEMU_MODULE_DIR"] = str(args.qemu_root / "usr/lib/x86_64-linux-gnu/qemu")
         command = [
             str(qemu), "-nodefaults", "-no-user-config", "-no-reboot",
-            "-machine", "pc,accel=tcg", "-cpu", "max", "-m", args.memory, "-smp", "2" if args.full_agent else "1",
+            "-machine", "pc,accel=" + args.accelerator,
+            "-cpu", "host" if args.accelerator == "kvm" else "max",
+            "-m", args.memory, "-smp", "2" if args.full_agent else "1",
             "-display", "none", "-monitor", "none", "-serial", "stdio", "-net", "none",
             "-L", str(args.qemu_root / "usr/share/qemu"),
             "-bios", str(args.qemu_root / "usr/share/seabios/bios-256k.bin"),
             "-kernel", str(args.kernel), "-initrd", str(archive),
             "-append", "console=ttyS0 rdinit=/init panic=-1 loglevel=3",
         ]
+        if args.recovery_disk:
+            command += ["-blockdev", json.dumps({"driver": "raw", "node-name": "recovery",
+                        "file": {"driver": "file", "filename": str(args.recovery_disk.resolve())}}),
+                        "-device", "virtio-blk-pci,drive=recovery"]
         args.log.parent.mkdir(parents=True, exist_ok=True)
         start = time.monotonic()
         result = None
@@ -283,9 +327,27 @@ poweroff -f
                 for line in (pending + remainder).splitlines():
                     if line.startswith("VTEP_VM_EXIT="):
                         result = int(line.split("=", 1)[1])
-                if result != 0:
-                    raise RuntimeError("Privileged VM tests failed; inspect the saved log")
-                print("PASS all supplied privileged test suites", flush=True)
+                suites = ["conntrack"]
+                if (args.bpf_dir / "tc_vtep_return_core.o").exists():
+                    suites.append("core")
+                if args.agent_tests:
+                    suites.append("agent")
+                if args.live_tests:
+                    suites.append("live")
+                log.flush()
+                report = validate_output(args.log.read_text(), suites, args.require_test)
+                report.update(accelerator=args.accelerator,
+                              emulated=args.accelerator == "tcg",
+                              native_performance_validated=False,
+                              kernel_sha256=hashlib.sha256(args.kernel.read_bytes()).hexdigest(),
+                              elapsed_seconds=round(time.monotonic() - start, 3))
+                if args.report:
+                    args.report.parent.mkdir(parents=True, exist_ok=True)
+                    args.report.write_text(json.dumps(report, indent=2) + "\n")
+                if result != 0 or report["status"] != "PASS":
+                    raise RuntimeError("Privileged VM evidence failed: " + "; ".join(report["errors"]))
+                skipped = sum(len(r["skipped"]) for r in report["suites"].values())
+                print(f"PASS executed privileged suites; {skipped} optional tests skipped", flush=True)
             finally:
                 if process.poll() is None:
                     process.terminate()
