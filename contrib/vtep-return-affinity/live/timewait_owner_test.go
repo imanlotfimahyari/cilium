@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cilium/cilium/pkg/datapath/vtep/returnaffinity"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"golang.org/x/sys/unix"
@@ -41,6 +42,9 @@ func testTIMEWAITOwnershipLifetime(t *testing.T, mapped bool) {
 	f := newHandoffListenerFixture(t, tcpModeObject(t, "VTEP_RETURN_HANDOFF_OBJECT"), mapped)
 	spec, err := ebpf.LoadCollectionSpec(object)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := returnaffinity.ConfigureTimewaitTarget(spec); err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range spec.Maps {

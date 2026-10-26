@@ -39,13 +39,17 @@ func proofGone(t *testing.T, coll *ebpf.Collection, key handoffKey) bool {
 }
 
 func coreDrops(t *testing.T, f *handoffFixture, reason byte) uint64 {
+	return coreDirectionalDrops(t, f, reason, 2)
+}
+
+func coreDirectionalDrops(t *testing.T, f *handoffFixture, reason, direction byte) uint64 {
 	t.Helper()
 	var key []byte
 	var values []struct{ Count, Bytes uint64 }
 	it := f.collection.Maps["cilium_metrics"].Iterate()
 	var count uint64
 	for it.Next(&key, &values) {
-		if len(key) >= 2 && key[0] == reason && key[1]&3 == 2 {
+		if len(key) >= 2 && key[0] == reason && key[1]&3 == direction {
 			for _, v := range values {
 				count += v.Count
 			}

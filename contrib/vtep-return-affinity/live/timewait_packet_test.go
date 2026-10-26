@@ -13,6 +13,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"time"
 
+	"github.com/cilium/cilium/pkg/datapath/vtep/returnaffinity"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"golang.org/x/sys/unix"
@@ -24,6 +25,9 @@ func attachTIMEWAITPackets(t *testing.T, f *handoffFixture) *ebpf.Collection {
 	t.Helper()
 	spec, err := ebpf.LoadCollectionSpec(tcpModeObject(t, "VTEP_RETURN_TIMEWAIT_PACKET_OBJECT"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := returnaffinity.ConfigureTimewaitTarget(spec); err != nil {
 		t.Fatal(err)
 	}
 	replacements := make(map[string]*ebpf.Map)

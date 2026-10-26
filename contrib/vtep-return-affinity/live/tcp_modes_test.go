@@ -6,6 +6,7 @@ package live
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -56,7 +57,18 @@ func TestPrivilegedMappedIPv4Handoff(t *testing.T) {
 // child-to-admission handoff exists. Ensure it never guesses a prefix/peer,
 // even while another peer's established connection is alive.
 func TestPrivilegedSYNcookiesFailClosed(t *testing.T) {
-	f := newHandoffFixture(t, tcpModeObject(t, "VTEP_RETURN_HANDOFF_OBJECT"))
+	for _, variable := range []string{"VTEP_RETURN_HANDOFF_OBJECT", "VTEP_RETURN_CORE_OBJECT"} {
+		for _, mapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/mapped=%v", variable, mapped), func(t *testing.T) {
+				syncookiesFailClosed(t, variable, mapped)
+			})
+		}
+	}
+}
+
+func syncookiesFailClosed(t *testing.T, variable string, mapped bool) {
+	t.Helper()
+	f := newHandoffListenerFixture(t, tcpModeObject(t, variable), mapped)
 	client, server := f.connect(t, 0, 48100)
 	owner := f.owner(t, server)
 	if err := f.podNS.Do(func() error { return os.WriteFile("/proc/sys/net/ipv4/tcp_syncookies", []byte("2"), 0600) }); err != nil {
