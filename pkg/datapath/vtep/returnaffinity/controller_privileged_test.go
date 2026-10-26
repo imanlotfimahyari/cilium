@@ -39,6 +39,9 @@ func TestPrivilegedPreQueueOnlyStampsSYNACKs(t *testing.T) {
 	for _, m := range spec.Maps {
 		m.Pinning = ebpf.PinNone
 	}
+	if err := ConfigureTimewaitTarget(spec); err != nil {
+		t.Fatal(err)
+	}
 	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
 		t.Fatal(err)

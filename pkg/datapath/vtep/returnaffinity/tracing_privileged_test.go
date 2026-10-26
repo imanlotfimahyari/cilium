@@ -29,6 +29,9 @@ func tracingController(t *testing.T) (*Controller, *ebpf.CollectionSpec) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := ConfigureTimewaitTarget(spec); err != nil {
+		t.Fatal(err)
+	}
 	c := NewController(nil, ControllerConfig{Enabled: true,
 		Journal: filepath.Join(t.TempDir(), "journal"),
 		Pins:    filepath.Join(filepath.Dir(privilegedPinPath(t)), "runtime"), Cgroup: "/sys/fs/cgroup"})

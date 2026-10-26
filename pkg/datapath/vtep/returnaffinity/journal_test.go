@@ -4,6 +4,8 @@
 package returnaffinity
 
 import (
+	"bytes"
+	"encoding/json"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -11,8 +13,91 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/cilium/cilium/pkg/testutils"
 )
+
+func TestJournalRejectsAmbiguousOrFutureStateWithoutRewriting(t *testing.T) {
+	for name, body := range map[string]string{
+		"future_field":        `{"Version":2,"BootID":"test","Namespaces":{},"FutureOwnership":true}`,
+		"nested_future_field": `{"Version":2,"BootID":"test","Namespaces":{"1":{"Cookie":1,"Phase":"retired","FutureOwner":2}}}`,
+		"duplicate_history":   `{"Version":2,"BootID":"test","Namespaces":{},"Retired":[{"First":1,"Last":2}],"Retired":[]}`,
+		"case_alias":          `{"Version":2,"BootID":"test","Namespaces":{},"namespaces":{}}`,
+		"nested_duplicate":    `{"Version":2,"BootID":"test","Namespaces":{},"Retired":[{"First":1,"Last":2,"last":3}]}`,
+		"numeric_alias":       `{"Version":2,"BootID":"test","Namespaces":{"01":{"Cookie":1,"Phase":"retired"},"1":{"Cookie":1,"Phase":"retired"}}}`,
+		"duplicate_cookie":    `{"Version":2,"BootID":"test","Namespaces":{"1":{"Cookie":1,"Phase":"retired"},"1":{"Cookie":1,"Phase":"ready"}}}`,
+		"trailing_object":     `{"Version":2,"BootID":"test","Namespaces":{}} {}`,
+		"trailing_garbage":    `{"Version":2,"BootID":"test","Namespaces":{}} x`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, enabled := range []bool{false, true} {
+				c := unitController(t, enabled)
+				if err := os.MkdirAll(filepath.Dir(c.cfg.Journal), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(c.cfg.Journal, []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Start(); err == nil {
+					t.Fatal("ambiguous or future history was accepted")
+				}
+				after, err := os.ReadFile(c.cfg.Journal)
+				if err != nil || !bytes.Equal(after, []byte(body)) {
+					t.Fatalf("refusal changed durable history: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestJournalReadBoundsPreserveOversizedHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxJournalBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := readJournal(path); err == nil {
+		t.Fatal("unbounded recovery input was accepted")
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Size() != maxJournalBytes+1 {
+		t.Fatal("oversized recovery input was modified")
+	}
+	if _, err := readJournal(t.TempDir()); err == nil {
+		t.Fatal("directory accepted as a journal")
+	}
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := unix.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readJournal(fifo); err == nil {
+		t.Fatal("FIFO accepted as a journal")
+	}
+}
+
+func BenchmarkJournalRecoveryAtAdmissionCapacity(b *testing.B) {
+	j := socketJournal{Version: journalVersion, BootID: "benchmark", Namespaces: map[uint64]membership{}}
+	for i := range maxJournalHistory {
+		j.rememberRetired(uint64(2*i + 1))
+	}
+	data, err := json.Marshal(j)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := decodeJournal(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func TestRetiredHistoryPreservesExactSet(t *testing.T) {
 	j := socketJournal{Version: journalVersion, BootID: "test", Namespaces: map[uint64]membership{}}

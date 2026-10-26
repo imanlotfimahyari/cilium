@@ -224,6 +224,9 @@ func (c *Controller) InitializeRuntime(spec *ebpf.CollectionSpec) (err error) {
 	c.initializationAttempted = true
 	restore := c.journal.Initialized
 	spec = spec.Copy()
+	if err := ConfigureTimewaitTarget(spec); err != nil {
+		return err
+	}
 	for _, m := range spec.Maps {
 		m.Pinning = ebpf.PinNone
 	}

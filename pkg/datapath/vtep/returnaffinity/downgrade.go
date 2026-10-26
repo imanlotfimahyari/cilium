@@ -4,8 +4,6 @@
 package returnaffinity
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,16 +74,9 @@ func ExportLegacyJournal(journalPath, pinsPath string, checkOnly bool) (int, err
 		return 0, err
 	}
 	defer lease.Close()
-	data, err := os.ReadFile(journalPath)
+	data, err := readJournalData(journalPath)
 	if err != nil {
 		return 0, err
-	}
-	// An export must not discard fields from an unrecognized future extension.
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var strict socketJournal
-	if err := decoder.Decode(&strict); err != nil {
-		return 0, fmt.Errorf("decode journal for legacy export: %w", err)
 	}
 	j, err := decodeJournal(data)
 	if err != nil {

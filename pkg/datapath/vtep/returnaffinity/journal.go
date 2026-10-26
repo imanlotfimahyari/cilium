@@ -4,12 +4,18 @@
 package returnaffinity
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 const journalVersion = 2
@@ -17,6 +23,10 @@ const journalVersion = 2
 // Bound sparse history as well as active registrations. Reaching the bound
 // rejects new registrations; it never forgets an old namespace incarnation.
 const maxJournalHistory = 8192
+
+// Bound recovery input independently of admission capacity. Existing oversized
+// histories are never truncated or rewritten to make them fit.
+const maxJournalBytes = 64 << 20
 
 type cookieRange struct {
 	First uint64
@@ -84,16 +94,106 @@ func (j *socketJournal) rememberRetired(cookie uint64) {
 }
 
 func readJournal(path string) (socketJournal, error) {
-	data, err := os.ReadFile(path)
+	data, err := readJournalData(path)
 	if err != nil {
 		return socketJournal{}, err
 	}
 	return decodeJournal(data)
 }
 
+func readJournalData(path string) ([]byte, error) {
+	// Nonblocking open also lets the regular-file check reject a FIFO without
+	// hanging agent startup waiting for a writer.
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxJournalBytes {
+		return nil, fmt.Errorf("VTEP socket journal must be a regular file of at most %d bytes", maxJournalBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxJournalBytes+1))
+	if err == nil && len(data) > maxJournalBytes {
+		err = fmt.Errorf("VTEP socket journal exceeds %d bytes", maxJournalBytes)
+	}
+	return data, err
+}
+
+// encoding/json accepts duplicate keys, case aliases and noncanonical integer
+// map keys. They can overwrite ownership history before validation sees it.
+// Reject ambiguous input before decoding into the durable schema.
+func validateJournalJSON(d *json.Decoder, depth int, namespaceKeys bool) error {
+	if depth > 8 {
+		return fmt.Errorf("excessive VTEP socket journal nesting")
+	}
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]bool)
+		for d.More() {
+			token, err := d.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := token.(string)
+			if !ok {
+				return fmt.Errorf("invalid VTEP socket journal key")
+			}
+			canonical := strings.ToLower(key)
+			if namespaceKeys {
+				cookie, err := strconv.ParseUint(key, 10, 64)
+				if err != nil || strconv.FormatUint(cookie, 10) != key {
+					return fmt.Errorf("noncanonical namespace cookie in VTEP socket journal")
+				}
+			}
+			if seen[canonical] {
+				return fmt.Errorf("duplicate VTEP socket journal key")
+			}
+			seen[canonical] = true
+			if err := validateJournalJSON(d, depth+1, depth == 0 && canonical == "namespaces"); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for d.More() {
+			if err := validateJournalJSON(d, depth+1, false); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("invalid VTEP socket journal delimiter")
+	}
+	_, err = d.Token()
+	return err
+}
+
 func decodeJournal(data []byte) (socketJournal, error) {
 	var j socketJournal
-	if err := json.Unmarshal(data, &j); err != nil {
+	if len(data) > maxJournalBytes {
+		return j, fmt.Errorf("VTEP socket journal exceeds %d bytes", maxJournalBytes)
+	}
+	check := json.NewDecoder(bytes.NewReader(data))
+	check.UseNumber()
+	if err := validateJournalJSON(check, 0, false); err != nil {
+		return j, err
+	}
+	if _, err := check.Token(); err != io.EOF {
+		return j, fmt.Errorf("trailing data in VTEP socket journal")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&j); err != nil {
 		return j, err
 	}
 	if (j.Version != 1 && j.Version != journalVersion) || j.BootID == "" || j.Namespaces == nil ||
@@ -123,6 +223,9 @@ func writeJournal(path string, j socketJournal) (err error) {
 	data, err := json.Marshal(j)
 	if err != nil {
 		return err
+	}
+	if len(data) > maxJournalBytes {
+		return fmt.Errorf("VTEP socket journal exceeds %d bytes; original history preserved", maxJournalBytes)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
