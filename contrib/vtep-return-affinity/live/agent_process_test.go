@@ -6,6 +6,7 @@ package live
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,52 @@ type agentProcess struct {
 	err     error
 	logPath string
 	client  *http.Client
+}
+
+type agentVersion struct {
+	Binary, Source string
+}
+
+func currentAgentVersion() agentVersion {
+	return agentVersion{os.Getenv("VTEP_RETURN_AGENT_BINARY"), "/var/lib/cilium-source/bpf"}
+}
+
+func previousAgentVersion() agentVersion {
+	return agentVersion{os.Getenv("VTEP_RETURN_PREVIOUS_AGENT_BINARY"), "/var/lib/cilium-previous/bpf"}
+}
+
+func agentDigest(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// Called only before initial startup or after the old process has exited.
+// Keep the canonical source path constant across images; both separately
+// supplied trees are fingerprinted by the VM runner. State/pins are untouched.
+func stageAgentSource(t *testing.T, version agentVersion) {
+	t.Helper()
+	const destination = "/var/lib/cilium/bpf"
+	if _, err := os.Stat(version.Source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(destination); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(destination, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(destination, os.DirFS(version.Source)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (a *agentProcess) request(method, path string, body any, out any) error {
@@ -76,8 +123,16 @@ func agentLogTail(path string) string {
 }
 
 func startRealAgent(t *testing.T, f *handoffFixture, run, pins string, enabled bool) *agentProcess {
+	return startRealAgentVersion(t, f, run, pins, enabled, currentAgentVersion())
+}
+
+func startRealAgentVersion(t *testing.T, f *handoffFixture, run, pins string, enabled bool, version agentVersion) *agentProcess {
 	t.Helper()
-	logPath := filepath.Join(run, "agent.log")
+	if filepath.Base(version.Binary) != "cilium-agent" {
+		t.Fatal("agent fixtures must preserve the cilium-agent executable name")
+	}
+	stageAgentSource(t, version)
+	logPath := filepath.Join(run, filepath.Base(filepath.Dir(version.Source))+".log")
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +156,7 @@ func startRealAgent(t *testing.T, f *handoffFixture, run, pins string, enabled b
 		"--vtep-mac=" + f.peerVTEP[0].Attrs().HardwareAddr.String() + "," + f.peerVTEP[1].Attrs().HardwareAddr.String(),
 		"--enable-experimental-vtep-return-affinity=" + strconv.FormatBool(enabled),
 		"--state-dir=" + run, "--bpf-root=" + pins, "--socket-path=" + socket}
-	a := &agentProcess{cmd: exec.Command(os.Getenv("VTEP_RETURN_AGENT_BINARY"), args...), done: make(chan struct{}), logPath: logPath}
+	a := &agentProcess{cmd: exec.Command(version.Binary, args...), done: make(chan struct{}), logPath: logPath}
 	a.cmd.Env = []string{"PATH=/bin", "GOMAXPROCS=2", "CILIUM_K8S_NODE_NAME=vtep-lab"}
 	a.cmd.Stdout, a.cmd.Stderr = io.MultiWriter(log, os.Stdout), io.MultiWriter(log, os.Stdout)
 	if err := f.router.Do(func() error { return a.cmd.Start() }); err != nil {
@@ -360,6 +415,21 @@ func TestPrivilegedRealAgentProcess(t *testing.T) {
 	if os.Getenv("VTEP_RETURN_ISOLATED_VM") != "1" || os.Getenv("VTEP_RETURN_AGENT_BINARY") == "" {
 		t.Skip("supply --full-agent in the isolated VM")
 	}
+	initial := currentAgentVersion()
+	previous := previousAgentVersion()
+	mode := os.Getenv("VTEP_RETURN_PREVIOUS_AGENT_MODE")
+	if previous.Binary != "" {
+		currentDigest, previousDigest := agentDigest(t, initial.Binary), agentDigest(t, previous.Binary)
+		if currentDigest == previousDigest {
+			t.Fatal("cross-version coverage requires distinct agent binaries")
+		}
+		t.Logf("current agent SHA256=%s; previous agent SHA256=%s; transition=%s", currentDigest, previousDigest, mode)
+		if mode == "compatible" {
+			initial = previous
+		} else if mode != "missing-hashdance" {
+			t.Fatal("unknown previous agent compatibility mode")
+		}
+	}
 	runStep := func(name string, fn func(*testing.T)) {
 		if !t.Run(name, fn) {
 			t.FailNow()
@@ -385,7 +455,7 @@ func TestPrivilegedRealAgentProcess(t *testing.T) {
 	}
 	nspath := filepath.Join(defaults.NetNsPath, "vtep-lab-pod")
 	pinTestNamespace(t, f.podNS, nspath, f.cleanup)
-	a := startRealAgent(t, f, run, pins, true)
+	a := startRealAgentVersion(t, f, run, pins, true, initial)
 	if err := f.router.Do(func() error { var err error; f.nodeVTEP, err = netlink.LinkByName("cilium_vxlan"); return err }); err != nil {
 		t.Fatal(err)
 	}
@@ -432,15 +502,17 @@ func TestPrivilegedRealAgentProcess(t *testing.T) {
 		}
 		transferHandoff(t, client, server, "real-agent-native-overlapping-prefix")
 	})
-	runStep("SIGKILL_restart_preserves_live_connections", func(t *testing.T) {
+	transition := func(t *testing.T, version agentVersion) {
+		t.Helper()
 		stopKeeper := tw.keepAlive(t)
 		defer stopKeeper()
 		a.cmd.Process.Kill()
 		<-a.done
 		transferHandoff(t, clientA, serverA, "while-agent-is-down")
 		tw.verify(t)
-		a = startRealAgent(t, f, run, pins, true)
+		a = startRealAgentVersion(t, f, run, pins, true, version)
 		waitAgentEndpointReady(t, a, id)
+		waitAgentHostReady(t, a)
 		m := openAgentOwnerMap(t, pins)
 		defer m.Close()
 		if ownerFromMap(t, m, serverA) != beforeA || ownerFromMap(t, m, serverB) != beforeB {
@@ -450,7 +522,42 @@ func TestPrivilegedRealAgentProcess(t *testing.T) {
 		transferHandoff(t, clientB, serverB, "after-real-agent-restart-B")
 		assertAgentGraph(t, graph, snapshotAgentAffinity(t, pins))
 		tw.verify(t)
-	})
+	}
+	if previous.Binary != "" && mode == "compatible" {
+		runStep("upgrade_previous_to_current_preserves_live_connections", func(t *testing.T) {
+			transition(t, currentAgentVersion())
+		})
+		runStep("rollback_current_to_previous_preserves_live_connections", func(t *testing.T) {
+			transition(t, previous)
+		})
+	} else {
+		runStep("SIGKILL_restart_preserves_live_connections", func(t *testing.T) {
+			transition(t, currentAgentVersion())
+		})
+		if previous.Binary != "" {
+			runStep("unsupported_previous_agent_refuses_without_replacing_live_graph", func(t *testing.T) {
+				stopKeeper := tw.keepAlive(t)
+				defer stopKeeper()
+				a.cmd.Process.Kill()
+				<-a.done
+				refusePreviousAgent(t, f, a, previous)
+				assertAgentGraph(t, graph, snapshotAgentAffinity(t, pins))
+				transferHandoff(t, clientA, serverA, "after-unsupported-previous-agent")
+				tw.verify(t)
+				a = startRealAgent(t, f, run, pins, true)
+				waitAgentEndpointReady(t, a, id)
+				waitAgentHostReady(t, a)
+				assertAgentGraph(t, graph, snapshotAgentAffinity(t, pins))
+				m := openAgentOwnerMap(t, pins)
+				defer m.Close()
+				if ownerFromMap(t, m, serverA) != beforeA || ownerFromMap(t, m, serverB) != beforeB {
+					t.Fatal("refused rollback or recovery changed socket owners")
+				}
+				transferHandoff(t, clientB, serverB, "after-current-agent-recovery")
+				tw.verify(t)
+			})
+		}
+	}
 	runStep("retirement_prevents_legacy_fallthrough", func(t *testing.T) {
 		if err := a.request("DELETE", fmt.Sprintf("/endpoint/cilium-local:%d", id), nil, nil); err != nil {
 			t.Fatal(err)
@@ -590,14 +697,26 @@ func refuseUnsafeDisable(t *testing.T, f *handoffFixture, previous *agentProcess
 			args[i] = "--enable-experimental-vtep-return-affinity=false"
 		}
 	}
-	logPath := previous.logPath + ".disable"
+	runRefusedAgent(t, f, previous.cmd.Path, previous.cmd.Env, args,
+		previous.logPath+".disable", 30*time.Second, "socket-affinity rollback requires draining")
+}
+
+func refusePreviousAgent(t *testing.T, f *handoffFixture, running *agentProcess, version agentVersion) {
+	t.Helper()
+	stageAgentSource(t, version)
+	runRefusedAgent(t, f, version.Binary, running.cmd.Env, running.cmd.Args[1:],
+		running.logPath+".previous-refusal", 3*time.Minute, "fentry inet_twsk_hashdance not supported")
+}
+
+func runRefusedAgent(t *testing.T, f *handoffFixture, binary string, env, args []string, logPath string, timeout time.Duration, reason string) {
+	t.Helper()
 	log, err := os.Create(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer log.Close()
-	cmd := exec.Command(previous.cmd.Path, args...)
-	cmd.Env = previous.cmd.Env
+	cmd := exec.Command(binary, args...)
+	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = log, log
 	if err := f.router.Do(func() error { return cmd.Start() }); err != nil {
 		t.Fatal(err)
@@ -607,18 +726,18 @@ func refuseUnsafeDisable(t *testing.T, f *handoffFixture, previous *agentProcess
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Fatal("disabled agent accepted live affinity endpoints")
+			t.Fatal("unsafe agent transition accepted live affinity endpoints")
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(timeout):
 		cmd.Process.Kill()
 		<-done
-		t.Fatal("disabled agent did not refuse live endpoints")
+		t.Fatal("unsafe agent transition did not refuse live endpoints")
 	}
 	b, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "socket-affinity rollback requires draining") {
-		t.Fatalf("disabled agent failed for a different reason\n%s", agentLogTail(logPath))
+	if !strings.Contains(string(b), reason) {
+		t.Fatalf("agent failed for a different reason; expected %q\n%s", reason, agentLogTail(logPath))
 	}
 }
