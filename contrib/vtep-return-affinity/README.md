@@ -232,3 +232,46 @@ libraries. The daemon retains its required `--install-iptables-rules=true`.
 
 Validated milestones are retained as local Git commits. See
 [checkpoint and backup workflow](CHECKPOINTS.md).
+
+## Actual-agent prototype transitions
+
+The VM runner can package a current agent and a distinct previous agent, each
+with its own BPF source tree. Both are executed with the `cilium-agent` basename
+because Cilium uses the executable name to select agent initialization. Before
+each start, the fixture stages that version's BPF tree at the same canonical
+path. This models source replacement without path-dependent compilation tags;
+it never changes the journal or pins to make an incompatible version fit.
+
+Additional artifact arguments:
+
+```sh
+--full-agent /tmp/vtep-build/cilium-agent-v16 \
+--source-bpf /tmp/vtep-v16/bpf \
+--previous-full-agent /tmp/vtep-build/cilium-agent-v15 \
+--previous-source-bpf /tmp/vtep-v15/bpf
+```
+
+Use `--previous-agent-mode compatible` for the reviewed v15 -> v16 -> v15
+prototype transition on Linux 6.8. Require both exact subtests:
+
+- `TestPrivilegedRealAgentProcess/upgrade_previous_to_current_preserves_live_connections`
+- `TestPrivilegedRealAgentProcess/rollback_current_to_previous_preserves_live_connections`
+
+Use `--previous-agent-mode missing-hashdance` on Linux 6.12 to test the known
+v15 unsupported-hook refusal, preservation of the live graph and recovery with
+v16. Require
+`TestPrivilegedRealAgentProcess/unsupported_previous_agent_refuses_without_replacing_live_graph`.
+A failure for an unrelated reason does not satisfy that test. The compatible
+mode is not a promise that arbitrary Cilium versions can reuse this experiment.
+
+Both modes must also pass the root lifecycle test, real packet/TIME-WAIT checks,
+unsafe-disable refusal and coordinated drain/disable. Reports fingerprint both
+agent binaries, both supplied production BPF trees and the compiler. Identical
+agent binaries are refused before boot; the two production trees can legitimately
+match when only the agent's Go implementation changed.
+
+For a mixed-kernel run, kernel_matrix.py accepts per-case `previous_agent_mode`
+and `required_tests` fields in addition to `name`, `kernel` and `modules`.
+Supply all shared artifact arguments after `--`, plus
+`--live-test-run '^TestPrivilegedRealAgentProcess$'`. All selected transitions
+must produce explicit PASS evidence; skipped/missing required tests fail.

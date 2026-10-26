@@ -4,7 +4,8 @@
 
 """Run the same explicit VM coverage sequentially on supplied trusted kernels.
 
-The JSON config contains a kernels list of {name, kernel, modules}. Supply
+The JSON config contains a kernels list of {name, kernel, modules}, optionally
+with previous_agent_mode and required_tests for per-kernel transition coverage. Supply
 ordinary privileged_vm.py artifact/coverage arguments after --. Failure on one
 kernel does not erase its report or prevent the other kernels being tested.
 """
@@ -43,6 +44,10 @@ def main():
         command = [sys.executable, str(runner), *args.vm_args[1:],
                    "--kernel", case["kernel"], "--module-root", case["modules"],
                    "--log", str(args.output / (name + ".log")), "--report", str(result_file)]
+        if "previous_agent_mode" in case:
+            command += ["--previous-agent-mode", case["previous_agent_mode"]]
+        for test in case.get("required_tests", []):
+            command += ["--require-test", test]
         code = subprocess.run(command, check=False).returncode
         if result_file.exists():
             result = json.loads(result_file.read_text())

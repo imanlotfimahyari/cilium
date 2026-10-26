@@ -28,6 +28,21 @@ import time
 from validation_results import validate_output
 
 
+def file_sha256(path):
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def bpf_tree_sha256(root):
+    digest = hashlib.sha256()
+    for source in sorted(root.rglob("*")):
+        relative = source.relative_to(root)
+        if source.is_file() and source.suffix in {".c", ".h"} and "tests" not in relative.parts:
+            digest.update(str(relative).encode() + b"\0")
+            digest.update(bytes.fromhex(file_sha256(source)))
+    return digest.hexdigest()
+
+
 def entry(name, mode, data=b"", major=0, minor=0):
     name = name.encode() + b"\0"
     fields = [1, mode, 0, 0, 1, 0, len(data), 0, 0, major, minor, len(name), 0]
@@ -78,6 +93,12 @@ def main():
     p.add_argument("--live-test-run", default=".", help="Go test name expression for focused live validation")
     p.add_argument("--runtime-object", type=Path)
     p.add_argument("--full-agent", type=Path)
+    p.add_argument("--previous-full-agent", type=Path,
+                   help="Distinct previous prototype binary for actual cross-version tests")
+    p.add_argument("--previous-source-bpf", type=Path,
+                   help="Previous binary's own BPF source tree; never substitute the current tree")
+    p.add_argument("--previous-agent-mode", choices=["compatible", "missing-hashdance"], default="compatible",
+                   help="v15/v16 compatible transitions, or v15 refusal on the reviewed Linux 6.12 target change")
     p.add_argument("--clang", type=Path)
     p.add_argument("--source-bpf", type=Path)
     p.add_argument("--netfilter-root", type=Path)
@@ -112,6 +133,27 @@ def main():
         p.error("--timewait-packet-object requires --live-tests")
     if args.full_agent and not (args.clang and args.source_bpf and args.live_tests):
         p.error("--full-agent requires --clang, --source-bpf and --live-tests")
+    if bool(args.previous_full_agent) != bool(args.previous_source_bpf):
+        p.error("--previous-full-agent and --previous-source-bpf must be supplied together")
+    if args.previous_full_agent and not args.full_agent:
+        p.error("--previous-full-agent requires --full-agent")
+    if args.previous_agent_mode != "compatible" and not args.previous_full_agent:
+        p.error("--previous-agent-mode requires a previous agent binary and source tree")
+    if args.full_agent and not (args.source_bpf.is_dir() and args.netfilter_root and args.netfilter_root.is_dir()):
+        p.error("--full-agent requires a BPF source directory and --netfilter-root for its required iptables runtime")
+    if args.previous_full_agent and not args.previous_source_bpf.is_dir():
+        p.error("--previous-source-bpf must be a directory")
+    provenance = {}
+    if args.full_agent:
+        provenance = {"agent_sha256": file_sha256(args.full_agent),
+                      "bpf_tree_sha256": bpf_tree_sha256(args.source_bpf),
+                      "clang_sha256": file_sha256(args.clang)}
+    if args.previous_full_agent:
+        provenance.update(previous_agent_sha256=file_sha256(args.previous_full_agent),
+                          previous_bpf_tree_sha256=bpf_tree_sha256(args.previous_source_bpf),
+                          previous_agent_mode=args.previous_agent_mode)
+        if provenance["agent_sha256"] == provenance["previous_agent_sha256"]:
+            p.error("cross-version tests require two distinct agent binaries")
 
     # Resolve actual .modinfo dependencies before packaging. The agent opens
     # routing, XFRM and netfilter netlink families even when encryption is off.
@@ -158,6 +200,10 @@ done
 echo VTEP_VM_TEST_BEGIN
 if [ -f /bpf_vtep_return.o ]; then export VTEP_RETURN_RUNTIME_OBJECT=/bpf_vtep_return.o; fi
 if [ -x /cilium-agent ]; then export VTEP_RETURN_AGENT_BINARY=/cilium-agent; fi
+if [ -x /previous-agent/cilium-agent ]; then
+  export VTEP_RETURN_PREVIOUS_AGENT_BINARY=/previous-agent/cilium-agent
+  export VTEP_RETURN_PREVIOUS_AGENT_MODE=__PREVIOUS_AGENT_MODE__
+fi
 echo VTEP_SUITE_BEGIN=conntrack
 /bpftest -test.v -test.run '^TestBPF$' -bpf-test-path /bpf -test conntrack_test
 two=$?
@@ -209,6 +255,7 @@ poweroff -f
 """
     init = init.replace("__VM_MODULES__", " ".join(modules)).replace("__LIVE_TEST_RUN__", shlex.quote(args.live_test_run))
     init = init.replace("__AGENT_TEST_RUN__", shlex.quote(args.agent_test_run))
+    init = init.replace("__PREVIOUS_AGENT_MODE__", shlex.quote(args.previous_agent_mode))
     init = init.replace("__RECOVERY_MOUNT__", (
         "mkdir -p /recovery\nmount -t ext4 /dev/vda /recovery || { echo VTEP_VM_EXIT=1; poweroff -f; }\n"
         "export VTEP_RETURN_RECOVERY_STAGE=" + shlex.quote(args.recovery_stage)
@@ -246,15 +293,30 @@ poweroff -f
             if args.full_agent:
                 out.write(entry("cilium-agent", stat.S_IFREG | 0o755, args.full_agent.read_bytes()))
                 out.write(entry("bin/clang", stat.S_IFREG | 0o755, args.clang.read_bytes()))
-                for directory in ["var", "var/lib", "var/lib/cilium", "var/lib/cilium/bpf"]:
+                for directory in ["var", "var/lib"]:
                     out.write(entry(directory, stat.S_IFDIR | 0o755))
-                for source in sorted(args.source_bpf.rglob("*")):
-                    rel = "var/lib/cilium/bpf/" + str(source.relative_to(args.source_bpf))
-                    if source.is_dir():
-                        if source.name != "tests":
+                # Stage each version separately. The fixture installs its own
+                # source at the same canonical path before starting a binary,
+                # matching an image transition without path-dependent tags.
+                trees = [(args.source_bpf, "var/lib/cilium-source")]
+                if args.previous_full_agent:
+                    # components.IsCiliumAgent identifies the process by argv[0].
+                    # Distinguish versions by directory, retaining the real name.
+                    out.write(entry("previous-agent", stat.S_IFDIR | 0o755))
+                    out.write(entry("previous-agent/cilium-agent", stat.S_IFREG | 0o755, args.previous_full_agent.read_bytes()))
+                    trees.append((args.previous_source_bpf, "var/lib/cilium-previous"))
+                for source_root, library_root in trees:
+                    out.write(entry(library_root, stat.S_IFDIR | 0o755))
+                    out.write(entry(library_root + "/bpf", stat.S_IFDIR | 0o755))
+                    for source in sorted(source_root.rglob("*")):
+                        relative = source.relative_to(source_root)
+                        if "tests" in relative.parts:
+                            continue
+                        rel = library_root + "/bpf/" + str(relative)
+                        if source.is_dir():
                             out.write(entry(rel, stat.S_IFDIR | 0o755))
-                    elif source.suffix in {".h", ".c"} and "tests" not in source.relative_to(args.source_bpf).parts:
-                        out.write(entry(rel, stat.S_IFREG | 0o644, source.read_bytes()))
+                        elif source.suffix in {".h", ".c"}:
+                            out.write(entry(rel, stat.S_IFREG | 0o644, source.read_bytes()))
             if args.netfilter_root:
                 out.write(entry("lib", stat.S_IFLNK | 0o777, b"usr/lib"))
                 out.write(entry("lib64", stat.S_IFLNK | 0o777, b"usr/lib64"))
@@ -339,6 +401,7 @@ poweroff -f
                 report.update(accelerator=args.accelerator,
                               emulated=args.accelerator == "tcg",
                               native_performance_validated=False,
+                              provenance=provenance,
                               kernel_sha256=hashlib.sha256(args.kernel.read_bytes()).hexdigest(),
                               elapsed_seconds=round(time.monotonic() - start, 3))
                 if args.report:
