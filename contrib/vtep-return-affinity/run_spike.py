@@ -62,6 +62,7 @@ def main():
         "socket_core.o": "contrib/vtep-return-affinity/live/testdata/socket_core.c",
         "socket_timewait_core.o": "contrib/vtep-return-affinity/live/testdata/socket_timewait_core.c",
         "socket_identity.o": "contrib/vtep-return-affinity/live/testdata/socket_identity.c",
+        "syncookie_child.o": "contrib/vtep-return-affinity/live/testdata/syncookie_child.c",
         "timewait_owner.o": "contrib/vtep-return-affinity/live/testdata/timewait_owner.c",
         "timewait_packet.o": "contrib/vtep-return-affinity/live/testdata/timewait_packet.c",
         "vm-bpf/tc_vtep_return_core.o": "bpf/tests/tc_vtep_return_core.c",

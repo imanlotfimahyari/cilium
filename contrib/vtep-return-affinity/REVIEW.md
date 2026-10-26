@@ -91,6 +91,13 @@ Source:
 - https://github.com/torvalds/linux/blob/v6.8/net/core/filter.c
 - `bpf/include/linux/bpf.h`, documentation for `TCP_BPF_SYN_MAC`
 
+v18 now demonstrates kernel-validated child evidence before the passive
+callback using an isolated `tcp_get_cookie_sock` fexit probe. Both listener
+families, invalid ACKs, namespace isolation and exact tuple reuse pass on the
+supplied 6.8/6.12 kernels. This establishes a candidate child handoff point;
+binding it to the original policy-approved external peer is still required.
+See SYNCOOKIES.md. Production forwarding and its managed hook graph are unchanged.
+
 ## Required next gates
 
 | Gate | Exit evidence |

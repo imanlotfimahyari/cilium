@@ -1,5 +1,11 @@
 # Experimental IPv4/TCP VXLAN return affinity
 
+**v18:** an isolated SYN-cookie probe verifies kernel-validated child evidence
+before the passive-established callback on Linux 6.8 and 6.12, for both listener
+families. Invalid ACK, namespace isolation and exact tuple reuse tests pass;
+production SYN-cookie forwarding remains disabled. See
+[the handoff and next gate](SYNCOOKIES.md) and [v18 validation](VALIDATION-v18.md).
+
 **v17:** actual-agent lifecycle validation now passes on Linux 6.8 and 6.12.
 Linux 6.8 preserves live TCP/TIME-WAIT and every managed map/link ID across
 v15 -> v16 -> v15. Linux 6.12 safely rejects the unsupported v15 initialization,
@@ -286,3 +292,14 @@ and `required_tests` fields in addition to `name`, `kernel` and `modules`.
 Supply all shared artifact arguments after `--`, plus
 `--live-test-run '^TestPrivilegedRealAgentProcess$'`. All selected transitions
 must produce explicit PASS evidence; skipped/missing required tests fail.
+
+## SYN-cookie child capability probe
+
+`run_spike.py` also builds `syncookie_child.o`. To run the isolated probe,
+supply `--cookie-object /tmp/vtep-build/syncookie_child.o` and the static live
+test binary to `privileged_vm.py`, select
+`--live-test-run '^TestPrivilegedSYNcookieChildEvidence$'`, and require that
+exact root plus the subtests listed in SYNCOOKIES.md for both listener families.
+The optional object requires `--live-tests`. The probe attaches one temporary
+tracing link and one sockops program inside the disposable guest and creates no
+pins. It never enables SYN-cookie forwarding in the production experiment.

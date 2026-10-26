@@ -64,3 +64,11 @@ unsupported-hook diagnostic and failed readiness, since base-datapath retries
 do not necessarily terminate the process. See VALIDATION-v17.md for the final
 executed evidence and its limits. Historical v16 reports retain their original
 scope; v17 adds actual-agent evidence rather than relabeling older tests.
+
+## v18 SYN-cookie capability checkpoint
+
+Local `de831993a7` adds one isolated cookie-child fexit probe, socket-local
+evidence and real-kernel regression tests. Both supplied kernels pass the new
+cases and retain the production forced-cookie fail-closed regressions. The
+probe does not modify the agent or production BPF. See SYNCOOKIES.md and
+VALIDATION-v18.md for the exact scope, evidence and next peer-binding gate.

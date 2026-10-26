@@ -85,6 +85,7 @@ def main():
     p.add_argument("--recovery-stage", choices=["prepare", "verify"])
     p.add_argument("--live-tests", type=Path)
     p.add_argument("--socket-object", type=Path)
+    p.add_argument("--cookie-object", type=Path)
     p.add_argument("--handoff-object", type=Path)
     p.add_argument("--core-object", type=Path)
     p.add_argument("--timewait-core-object", type=Path)
@@ -121,6 +122,8 @@ def main():
         p.error("recovery requires agent tests, runtime object and an existing disposable regular disk image")
     if args.socket_object and not args.live_tests:
         p.error("--socket-object requires --live-tests")
+    if args.cookie_object and not args.live_tests:
+        p.error("--cookie-object requires --live-tests")
     if args.handoff_object and not args.live_tests:
         p.error("--handoff-object requires --live-tests")
     if args.core_object and not args.live_tests:
@@ -228,6 +231,9 @@ if [ -x /livetest ]; then
   if [ -f /socket_identity.o ]; then
     export VTEP_RETURN_SOCKET_OBJECT=/socket_identity.o
   fi
+  if [ -f /syncookie_child.o ]; then
+    export VTEP_RETURN_COOKIE_OBJECT=/syncookie_child.o
+  fi
   if [ -f /socket_handoff.o ]; then
     export VTEP_RETURN_HANDOFF_OBJECT=/socket_handoff.o
   fi
@@ -280,6 +286,8 @@ poweroff -f
                 out.write(entry("agenttests", stat.S_IFREG | 0o755, args.agent_tests.read_bytes()))
             if args.live_tests:
                 out.write(entry("livetest", stat.S_IFREG | 0o755, args.live_tests.read_bytes()))
+            if args.cookie_object:
+                out.write(entry("syncookie_child.o", stat.S_IFREG | 0o644, args.cookie_object.read_bytes()))
             if args.core_object:
                 out.write(entry("socket_core.o", stat.S_IFREG | 0o644, args.core_object.read_bytes()))
             if args.timewait_core_object:
