@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
+# This file was not reviewed by a human before submission
 # SPDX-License-Identifier: Apache-2.0
 # Copyright Authors of Cilium
 """Validate native IPv4 TCP and actual CNI/identity/policy/lifecycle in a disposable lab.
 
 The patched Cilium installation and workload image must already be available.
-This is not the external-VTEP test: that still requires a real cluster peer fixture.
+Optional explicitly labelled Docker peers add external VNI-2 VXLAN coverage.
 No default context, kubeconfig contents, secrets, node addresses or raw logs are exported.
 """
 import argparse
 import json
+import ipaddress
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import time
 import uuid
+from external import ExternalPeers
 
 LAB_LABEL = "vtep-return-affinity.cilium.io/lab"
 
@@ -46,6 +49,9 @@ class Lab:
         self.hold = None
         self.cordoned = None
         self.server_uid = None
+        self.external = (ExternalPeers(args.external_peer, args.external_network, args.external_client)
+                         if getattr(args, "external_peer", None) else None)
+        self.external_port = 51000
 
     def run(self, *args, check=True, data=None, timeout=90):
         result = subprocess.run(self.prefix + list(args), input=data, text=True,
@@ -189,6 +195,43 @@ class Lab:
             raise RuntimeError("existing TCP connection failed during agent restart")
         return p if p.get("requests", 0) >= 3 else None
 
+    def external_request(self, peer, target):
+        # Never reuse a tuple across policy/endpoint transitions or retries.
+        self.external_port += 1
+        if self.external_port >= 65000:
+            raise RuntimeError("external fresh-tuple probe budget exhausted")
+        return self.external.request(peer, target, self.external_port)
+
+    def verify_external(self, server):
+        node = self.get("node", server["spec"]["nodeName"])
+        address = next(a["address"] for a in node["status"]["addresses"] if a["type"] == "InternalIP" and ":" not in a["address"])
+        agent = self.wait(lambda: self.agent(server["spec"]["nodeName"]), "external target agent")
+        mac = self.run("exec", "-n", self.args.cilium_namespace, agent["metadata"]["name"], "-c", "cilium-agent", "--",
+                       "cat", "/sys/class/net/cilium_vxlan/address").stdout.strip()
+        target = server["status"]["podIP"] + ":8080"
+        self.external.configure(server["status"]["podIP"], address, mac)
+        policy = {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": {"name": "external-clients", "namespace": self.ns},
+                  "spec": {"podSelector": {"matchLabels": {"role": "server"}}, "policyTypes": ["Ingress"], "ingress": [
+                      {"from": [{"ipBlock": {"cidr": self.external.client+"/32"}}], "ports": [{"protocol": "TCP", "port": 8080}]}]}}
+        self.apply(policy)
+        for peer in self.external.peers:
+            self.wait(lambda: self.external_request(peer, target), "external VXLAN allowed traffic")
+        # Prove reachability first; failed exec/setup cannot count as denial.
+        self.run("delete", "networkpolicy", "external-clients", "-n", self.ns)
+        for peer in self.external.peers:
+            failures = 0
+            def denied():
+                nonlocal failures
+                failures = failures + 1 if not self.external_request(peer, target) else 0
+                return failures >= 3
+            self.wait(denied, "external VXLAN policy denial")
+        self.apply(policy)
+        for peer in self.external.peers:
+            self.wait(lambda: self.external_request(peer, target), "external VXLAN policy restoration")
+        self.verify_policy(server)
+        self.record("two external VXLAN peers with a shared client address obey allow/deny policy")
+        return target
+
     def validate(self):
         nodes = self.get("nodes")["items"]
         # Every node must carry explicit disposable-lab ownership. Never mutate
@@ -199,18 +242,33 @@ class Lab:
                        and not any(t.get("effect") in ("NoSchedule", "NoExecute") for t in n["spec"].get("taints", []))]
         if len(schedulable) < 2:
             raise RuntimeError("need two schedulable, untainted lab nodes")
+        if self.external:
+            client = ipaddress.IPv4Address(self.external.client)
+            for node in nodes:
+                cidrs = node.get("spec", {}).get("podCIDRs", []) + ([node["spec"]["podCIDR"]] if node.get("spec", {}).get("podCIDR") else [])
+                if any(client.version == (network := ipaddress.ip_network(cidr)).version and client in network for cidr in cidrs):
+                    raise RuntimeError("external client overlaps a node pod range")
+                if any(a.get("address") == self.external.client for a in node.get("status", {}).get("addresses", [])):
+                    raise RuntimeError("external client overlaps a node address")
         self.record("explicit disposable-cluster preflight")
+        if self.external:
+            self.external.preflight()
         server = self.deploy(schedulable)
         self.selected_endpoint(server)
         for role in ("allowed", "denied"):
             self.selected_endpoint(self.client_pod(role))
         target = self.verify_policy(server)
         self.record("actual CNI selection, normal identities and cross-node allow/deny policy")
+        if self.external:
+            external_target = self.verify_external(server)
         if self.args.restart_agent:
             self.hold = subprocess.Popen(self.prefix + ["exec", "-n", self.ns, self.client_pod("allowed")["metadata"]["name"], "--", "/affinity-probe",
                                                         "-mode=hold", "-target="+target, "-timeout=5s"],
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             before = self.wait(self.progress, "persistent connection start")
+            if self.external:
+                self.external.start(external_target)
+                external_before = self.wait(self.external.progress, "both external persistent connections")
             node = server["spec"]["nodeName"]
             old = self.agent(node)
             self.run("delete", "pod", "-n", self.args.cilium_namespace, old["metadata"]["name"], "--wait=false")
@@ -221,12 +279,25 @@ class Lab:
                 raise RuntimeError("agent restart did not preserve the same TCP connection")
             self.verify_policy(server)
             self.record("real agent pod replacement preserves existing TCP connection and policy")
+            if self.external:
+                def external_progress():
+                    records = self.external.progress()
+                    if not records or any(p["requests"] <= b["requests"]+3 for p, b in zip(records, external_before)):
+                        return None
+                    if any(p["connection"] != b["connection"] for p, b in zip(records, external_before)):
+                        raise RuntimeError("external connection reconnected during agent restart")
+                    return records
+                self.wait(external_progress, "both external TCP connections survive agent restart")
+                self.record("agent restart preserves simultaneous external-peer TCP connections without reconnect")
+                self.external.close()
         previous = server["metadata"]["uid"]
         self.run("delete", "pod", "-n", self.ns, server["metadata"]["name"], "--wait=false")
         server = self.wait(lambda: self.server(previous_uid=previous), "replacement workload pod", 300)
         self.selected_endpoint(server)
         self.verify_policy(server)
         self.record("workload replacement receives a new CNI endpoint and retains policy")
+        if self.external:
+            self.verify_external(server)
         if self.args.drain_node:
             self.cordoned = server["spec"]["nodeName"]
             previous = server["metadata"]["uid"]
@@ -235,8 +306,17 @@ class Lab:
             self.selected_endpoint(server)
             self.verify_policy(server)
             self.record("node drain reschedules workload with working CNI and policy")
+            if self.external:
+                self.verify_external(server)
+                self.record("external VXLAN policy and fresh connections work after node drain")
 
     def close(self):
+        errors = []
+        if self.external:
+            try:
+                self.external.close()
+            except (RuntimeError, subprocess.TimeoutExpired):
+                errors.append("external fixture cleanup")
         if self.hold is not None:
             self.hold.terminate()
             try:
@@ -244,10 +324,9 @@ class Lab:
             except subprocess.TimeoutExpired:
                 self.hold.kill()
                 self.hold.wait(timeout=10)
-        errors = []
         if self.created:
             try:
-                self.run("delete", "namespace", self.ns, "--wait=false")
+                self.run("delete", "namespace", self.ns, "--wait=true", "--timeout=120s", timeout=140)
             except (RuntimeError, subprocess.TimeoutExpired):
                 errors.append("namespace cleanup")
         if self.cordoned:
@@ -266,16 +345,20 @@ def main():
     parser.add_argument("--cilium-namespace", default="kube-system")
     parser.add_argument("--restart-agent", action="store_true", help="replace the server node's agent pod")
     parser.add_argument("--drain-node", action="store_true", help="drain and then uncordon the server's lab node")
+    parser.add_argument("--external-peer", action="append", default=[], help="two preconfigured local Docker peer containers (repeat twice)")
+    parser.add_argument("--external-network", default="kind", help="dedicated bridge shared by kind nodes and external peers")
+    parser.add_argument("--external-client", default="198.18.0.9/32", help="shared isolated /32 client address; must not overlap cluster ranges")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     context_guard(args.context)
-    if not shutil.which("kubectl"):
+    missing = [name for name in (["kubectl", "docker"] if args.external_peer else ["kubectl"]) if not shutil.which(name)]
+    if missing:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps({"status": "blocked", "reason": "kubectl unavailable",
+        args.report.write_text(json.dumps({"status": "blocked", "reason": "required tools unavailable: " + ", ".join(missing),
                                            "cluster_operations_performed": False, "checks": []}, indent=2)+"\n")
-        parser.error("kubectl is unavailable; no cluster operations were performed")
+        parser.error("required tools unavailable; no cluster operations were performed")
     lab = Lab(args)
-    result = {"scope": "native IPv4 TCP, real CNI/identity/policy/lifecycle; external VXLAN peers not covered", "status": "failed"}
+    result = {"scope": "native IPv4 TCP, real CNI/identity/policy/lifecycle", "external_peers_requested": bool(args.external_peer), "status": "failed"}
     try:
         lab.validate()
         result["status"] = "passed"

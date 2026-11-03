@@ -1,3 +1,5 @@
+<!-- This file was not reviewed by a human before submission -->
+
 # Disposable Kubernetes validation
 
 This harness is implemented but has **not been executed against Kubernetes** in
@@ -19,10 +21,11 @@ On a preconfigured disposable cluster running this patched agent:
 - Optional node drain, workload rescheduling and policy enforcement afterwards.
 
 The server has a TCP readiness probe, so local-node-to-pod TCP is exercised too.
-The harness does **not** yet provision external VTEP peers inside Kubernetes.
-A passing report here would complete the native CNI/identity/policy checkpoint;
-it would not demonstrate Kubernetes-plus-external-VTEP return affinity. The
-isolated VM separately exercises actual VXLAN peers and actual endpoint code.
+The default run tests the native CNI/identity/policy checkpoint only. Optional
+external peer containers add real VNI-2 VXLAN traffic, shared client addresses,
+allow/deny policy and persistent TCP across agent replacement. This extension
+has offline tests but has **not run against a cluster**. Neither mode measures
+native performance or provides tenant isolation for identical TCP tuples.
 
 ## Required lab
 
@@ -91,3 +94,56 @@ any node cordoned by the harness, including on failure. Cleanup failure makes
 the report fail. Inspect any remaining namespace or cordoned node before reuse.
 The harness does not delete the cluster. Normal production rollback limitations
 still apply to the patched agent itself; see the parent README.
+
+## Optional external peers for kind
+
+Prepare two dedicated containers **before installing/enabling the patched
+agent**, so both exact peer IP/MAC pairs can be frozen in its VTEP configuration.
+They must share the nodes' local Docker bridge, have separate network namespaces,
+and contain `ip`, `rm` and `/affinity-probe`. The runner refuses remote Docker,
+unlabelled containers, shared/host networking and existing `akvtep` links. It
+changes only its newly created links/routes/neighbours inside these containers.
+No host/node routes or Cilium configuration are patched.
+
+After building the static probe above:
+
+```sh
+docker build -f contrib/vtep-return-affinity/k8s/Dockerfile.peer \
+  -t vtep-affinity-peer:local /tmp/vtep-affinity-probe
+for peer in affinity-peer-a affinity-peer-b; do
+  docker run -d --name "$peer" --network kind --cap-add NET_ADMIN \
+    --label vtep-return-affinity.cilium.io/peer=true vtep-affinity-peer:local
+done
+docker inspect affinity-peer-a affinity-peer-b
+```
+
+Use the bridge endpoint IP/MAC pairs from that **local** inspection in the
+existing `vtep` configuration. Both peers send from `198.18.0.9/32` with different
+TCP ports; the client range must be separate from node/pod/service ranges.
+The legacy prefix map can represent only one peer for an overlapping prefix;
+the experiment must nevertheless have both exact endpoint/MAC pairs configured.
+The test must succeed through both peers simultaneously without prefix fallback.
+Do not change peer configuration while the experiment is active.
+
+```sh
+python3 contrib/vtep-return-affinity/k8s/validate.py \
+  --context kind-vtep-affinity-lab --image vtep-affinity-probe:local \
+  --external-peer affinity-peer-a --external-peer affinity-peer-b \
+  --external-network kind --external-client 198.18.0.9/32 \
+  --restart-agent --drain-node --report /tmp/vtep-external-kubernetes.json
+```
+
+The peer VXLAN interfaces use VNI 2/UDP 8472, the target node's real VXLAN MAC,
+and a direct pod /32 route. Actual Linux TCP sockets bind the shared client
+address. Every short probe uses a fresh port; local bind/exec failures cannot
+count as policy denial. Existing sessions must retain the same server-side
+connection identifiers across agent replacement. Workload replacement and drain
+test fresh connections after retargeting; they do not promise that a connection
+to a deleted pod survives.
+
+Cleanup deletes the runner-created peer links and state files, deletes its
+namespace and uncordons its drained node. A failed cleanup fails the report.
+The two operator-created containers remain for inspection; remove them manually
+afterwards with `docker rm -f affinity-peer-a affinity-peer-b`. Peer addresses,
+MACs and connection identifiers are not included in the JSON report. A test
+failure can leave fixtures requiring inspection; never run this on production.

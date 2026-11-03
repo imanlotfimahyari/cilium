@@ -1,0 +1,9 @@
+# This file was not reviewed by a human before submission
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Authors of Cilium
+# Disposable external fixture, not a production workload image.
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+COPY affinity-probe /affinity-probe
+CMD ["sleep", "infinity"]
