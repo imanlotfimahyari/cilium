@@ -1,3 +1,4 @@
+// This file was not reviewed by a human before submission
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
@@ -16,23 +17,53 @@ import (
 // readiness verdict nor evidence that draining or fallback is safe. Only map
 // metadata, entry counts and aggregate counters leave the diagnostic reader.
 type CapacityReport struct {
-	Complete bool              `json:"complete"`
-	Atomic   bool              `json:"atomic"`
-	Started  time.Time         `json:"started"`
-	Finished time.Time         `json:"finished"`
-	Maps     []CapacityMap     `json:"maps"`
-	Counters map[string]uint64 `json:"counters,omitempty"`
-	Errors   []string          `json:"errors,omitempty"`
+	Complete    bool              `json:"complete"`
+	Atomic      bool              `json:"atomic"`
+	Started     time.Time         `json:"started"`
+	Finished    time.Time         `json:"finished"`
+	Maps        []CapacityMap     `json:"maps"`
+	Counters    map[string]uint64 `json:"counters,omitempty"`
+	Errors      []string          `json:"errors,omitempty"`
+	Limitations []string          `json:"limitations"`
 }
 
 type CapacityMap struct {
-	Name            string  `json:"name"`
-	ID              uint32  `json:"id"`
-	Kind            string  `json:"kind"`
-	MaxEntries      uint32  `json:"max_entries"`
-	ObservedEntries *uint32 `json:"observed_entries,omitempty"`
-	AtCapacity      bool    `json:"at_capacity"`
-	Note            string  `json:"note,omitempty"`
+	Name             string  `json:"name"`
+	ID               uint32  `json:"id"`
+	Kind             string  `json:"kind"`
+	MaxEntries       uint32  `json:"max_entries"`
+	ObservedEntries  *uint32 `json:"observed_entries,omitempty"`
+	AtCapacity       bool    `json:"at_capacity"`
+	Note             string  `json:"note,omitempty"`
+	Stage            string  `json:"stage"`
+	ObservedHeadroom *uint32 `json:"observed_headroom,omitempty"`
+	Pressure         string  `json:"pressure"`
+}
+
+// Unknown/failed enumeration never becomes apparent free capacity. These are
+// instantaneous observations, not insertion-failure counts or reservations.
+func describeCapacity(entry *CapacityMap) {
+	entry.Stage = "runtime"
+	switch entry.Name {
+	case "cilium_vtep_admit4":
+		entry.Stage = "syn_admission"
+	case "cilium_vtep_req4":
+		entry.Stage = "request_binding"
+	case CookieLedgerMap, CookieACKMap, CookieChildMap, CookiePacketMap:
+		entry.Stage = "cookie_handoff"
+	case TimewaitOwnerMap, TimewaitPacketMap, TimewaitProofMap:
+		entry.Stage = "timewait_handoff"
+	}
+	entry.Pressure = "unknown"
+	if entry.ObservedEntries == nil || *entry.ObservedEntries > entry.MaxEntries {
+		return
+	}
+	headroom := entry.MaxEntries - *entry.ObservedEntries
+	entry.ObservedHeadroom = &headroom
+	entry.Pressure = "available_at_sample"
+	if headroom == 0 {
+		entry.Pressure = "full_at_sample"
+	}
 }
 
 type capacityKeys interface{ NextKeyBytes(any) ([]byte, error) }
@@ -70,6 +101,12 @@ func countCapacityKeys(ctx context.Context, m capacityKeys, maximum uint32) (uin
 // out of packet processing, readiness and GC: it is explicitly operator-invoked.
 func InspectCapacity(ctx context.Context, mapDirectory string) (report CapacityReport) {
 	report.Started = time.Now().UTC()
+	report.Limitations = []string{
+		"non-atomic occupancy; observed headroom is not reserved capacity",
+		"admission and request binding have no dedicated insertion-failure counters",
+		"socket-local storage occupancy and total socket memory are unknown",
+		"map inspection does not validate hooks, readiness or safe rollback",
+	}
 	defer func() { report.Finished = time.Now().UTC() }()
 	readOnly := &ebpf.LoadPinOptions{ReadOnly: true}
 	bundle, err := openSocketBundle(mapDirectory, SocketCapacity, readOnly)
@@ -112,6 +149,7 @@ func InspectCapacity(ctx context.Context, mapDirectory string) (report CapacityR
 		default:
 			entry.Note = "fixed runtime/control slots; not admission occupancy"
 		}
+		describeCapacity(&entry)
 		report.Maps = append(report.Maps, entry)
 	}
 	// Counter names retain their actual meaning. Rejected TIME-WAIT transfers

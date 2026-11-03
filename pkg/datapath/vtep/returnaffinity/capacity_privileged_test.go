@@ -1,3 +1,4 @@
+// This file was not reviewed by a human before submission
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
@@ -43,6 +44,9 @@ func TestPrivilegedCapacityReadOnlyAndPressure(t *testing.T) {
 			}
 			if (row.Name == SocketOwnerMap || row.Name == CookieChildMap) && (row.ObservedEntries != nil || row.AtCapacity || row.Note == "") {
 				t.Fatal("socket-local occupancy was guessed")
+			}
+			if (row.Name == SocketOwnerMap || row.Name == CookieChildMap) && (row.ObservedHeadroom != nil || row.Pressure != "unknown") {
+				t.Fatal("socket storage was reported as available admission capacity")
 			}
 		}
 		return report
@@ -94,7 +98,11 @@ func TestPrivilegedCapacityReadOnlyAndPressure(t *testing.T) {
 			found := false
 			for _, row := range r.Maps {
 				if row.Name == spec.Name {
-					found = row.AtCapacity && row.ObservedEntries != nil && *row.ObservedEntries == spec.MaxEntries
+					found = row.AtCapacity && row.ObservedEntries != nil && *row.ObservedEntries == spec.MaxEntries &&
+						row.ObservedHeadroom != nil && *row.ObservedHeadroom == 0 && row.Pressure == "full_at_sample"
+					if spec.Name == SocketAdmitMap && row.Stage != "syn_admission" || spec.Name == SocketRequestMap && row.Stage != "request_binding" {
+						t.Fatal("pressure attributed to the wrong stage")
+					}
 				}
 			}
 			if !found {
@@ -122,7 +130,8 @@ func TestPrivilegedCapacityReadOnlyAndPressure(t *testing.T) {
 			}
 			r = inspect(t)
 			for _, row := range r.Maps {
-				if row.Name == spec.Name && (row.AtCapacity || row.ObservedEntries == nil || *row.ObservedEntries != spec.MaxEntries-1) {
+				if row.Name == spec.Name && (row.AtCapacity || row.ObservedEntries == nil || *row.ObservedEntries != spec.MaxEntries-1 ||
+					row.ObservedHeadroom == nil || *row.ObservedHeadroom != 1 || row.Pressure != "available_at_sample") {
 					t.Fatal("released capacity was not observed")
 				}
 			}

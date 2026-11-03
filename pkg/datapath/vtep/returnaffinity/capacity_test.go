@@ -1,3 +1,4 @@
+// This file was not reviewed by a human before submission
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
@@ -77,5 +78,34 @@ func TestCapacityMissingBundleIsIncomplete(t *testing.T) {
 	report := InspectCapacity(context.Background(), t.TempDir())
 	if report.Complete || len(report.Errors) == 0 || len(report.Maps) != 0 || report.Atomic || report.Finished.Before(report.Started) {
 		t.Fatalf("missing bundle reported healthy or empty: %+v", report)
+	}
+}
+
+func TestCapacityPressureDoesNotInventHeadroom(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		count    *uint32
+		pressure string
+		headroom uint32
+	}{
+		{"failed_enumeration", nil, "unknown", 0},
+		{"full", new(uint32(8)), "full_at_sample", 0},
+		{"partial", new(uint32(7)), "available_at_sample", 1},
+		{"invalid_count", new(uint32(9)), "unknown", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := CapacityMap{Name: "cilium_vtep_req4", MaxEntries: 8, ObservedEntries: tc.count}
+			describeCapacity(&entry)
+			if entry.Stage != "request_binding" || entry.Pressure != tc.pressure {
+				t.Fatalf("unexpected pressure classification: %+v", entry)
+			}
+			if tc.pressure == "unknown" {
+				if entry.ObservedHeadroom != nil {
+					t.Fatal("unknown occupancy became free capacity")
+				}
+			} else if entry.ObservedHeadroom == nil || *entry.ObservedHeadroom != tc.headroom {
+				t.Fatal("incorrect observed headroom")
+			}
+		})
 	}
 }
