@@ -5,8 +5,9 @@
 **Recovered v27:** upstream `main` at `2e94a0a3e3` and the previous v27
 implementation have been reconstructed and published on the separate
 `experimental/vtep-return-affinity-main-v27` branch. Both kernel packet/controller
-matrices pass. Full-agent upgrade/rollback and lifecycle validation is running.
-See [fresh recovery evidence and current gate](VALIDATION-v27.md).
+matrices and full-agent lifecycle checks pass. Live upgrade/rollback between
+the two rebuilt prototype versions, GC, replacement and drain/disable pass on
+both reviewed kernels. See [fresh recovery evidence and limits](VALIDATION-v27.md).
 
 **v26:** both reviewed kernels now prove that the live agent collects newly
 issued cookie records after their real expiry while four established owners

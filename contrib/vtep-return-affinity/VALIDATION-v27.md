@@ -2,6 +2,9 @@
 
 # Recovered v27: fresh validation — 3 November 2026
 
+**PASS: fresh focused host, packet/controller and full-agent lifecycle checks
+on both reviewed kernels.** This remains an experimental lab checkpoint.
+
 ## Recovery and publication
 
 The previous local v27 checkout, binaries and raw logs were unavailable.
@@ -63,16 +66,30 @@ vCPUs and 1,536 MiB. These durations are emulated correctness evidence.
 
 ## Actual-agent lifecycle gate
 
-Status: **RUNNING** on both kernels. The required sequence is the actual v26
-binary and its own BPF sources → recovered v27 → v26, followed by fresh-record
-periodic GC, endpoint retirement/replacement, unsafe-disable refusal/recovery,
-coordinated drain, complete hook/pin removal and ordinary TCP with the feature
-off. The root, loader regression and all ten nested lifecycle entries are
-required explicitly; missing/skipped entries cannot pass.
+Status: **PASS on both kernels**. The sequence uses the rebuilt v26 binary
+with its own BPF sources → recovered v27 → rebuilt v26. Both final reports
+contain the root, loader regression and all ten nested lifecycle entries:
+12 required entries, no failed/skipped tests, report errors, or unsuccessful
+VM exits. Existing conntrack/core regressions pass as well.
 
-The final agent guests use two vCPUs and 3,072 MiB each. Their Cilium processes
-have started successfully. Completed packet/controller checks do not by
-themselves establish that this final lifecycle gate has passed.
+| Actual-agent check | Linux 6.8.0-31 | Linux 6.12.0-061200 |
+| --- | --- | --- |
+| Live upgrade to recovered v27 | PASS | PASS |
+| Live rollback to rebuilt v26 | PASS | PASS |
+| Connection ownership and 18 map/eight tracing-link/two pod-hook identities preserved | PASS | PASS |
+| Fresh cookie child binding while the agent is down and after restore | PASS | PASS |
+| TIME-WAIT ownership and fresh-record periodic cookie GC | PASS | PASS |
+| Endpoint retirement and reused-address/interface pod replacement | PASS | PASS |
+| Unsafe-disable refusal and recovery | PASS | PASS |
+| Coordinated drain, full hook/pin removal and ordinary TCP with feature off | PASS | PASS |
+| Actual-loader pruned-map replacement regression | PASS | PASS |
+| Real-agent root duration | 1,789.08s | 1,679.66s |
+| Complete runner duration | 1,834.488s | 1,724.569s |
+
+The final agent guests use two vCPUs and 3,072 MiB each. These are disconnected
+QEMU/TCG correctness tests, not native performance benchmarks. Cross-version
+claims concern these two rebuilt prototype artifacts and this recorded
+toolchain, not arbitrary releases or the unavailable original binaries.
 
 ## Reconstructed harness corrections
 
@@ -87,7 +104,8 @@ The first full-agent archive failed during initramfs unpacking, before Cilium
 started. Debug-only sections were then removed from copied Go executables;
 every allocated ELF section was verified identical, including code, data and
 Go build information. The final guests also receive more memory headroom.
-The corrected guests unpack and start Cilium. The passing packet/controller
+The corrected guests unpack, start Cilium and pass the entire lifecycle suite.
+The passing packet/controller
 runs used the original test executables; the full-agent runs use their
 runtime-identical copies. Failed attempts remain separate from final evidence.
 
@@ -111,7 +129,9 @@ Real Kubernetes/CNI operation with normal identities and combined policy
 workflows remains deferred. Actual-agent fixtures use the no-policy allocator;
 policy/conntrack checks are separate packet-fixture evidence. Native performance,
 broader kernels, node reboot/rolling deployment and unrelated older-binary
-rollback remain unvalidated. Existing unsupported paths and drain requirements
+rollback remain unvalidated. The original lost executables were not recovered;
+live pins created by different builders/kernel combinations are not covered
+by these rebuilt-artifact transition tests. Existing unsupported paths and drain requirements
 remain. These lab results do not establish production readiness or acceptance.
 
 Human review is pending. Commits disclose AIL:4 and modified files carry the
