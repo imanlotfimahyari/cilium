@@ -3,9 +3,12 @@
 # Copyright Authors of Cilium
 
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import unittest
+import sys
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -15,6 +18,18 @@ spec.loader.exec_module(validate)
 
 
 class LabSafetyTests(unittest.TestCase):
+    def test_invalid_invocation_replaces_stale_pass_without_cluster_operations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory)/"report.json"
+            report.write_text('{"status":"passed"}')
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("validate.py")),
+                                     "--context", "default", "--image", "unused", "--report", str(report)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            state = json.loads(report.read_text())
+            self.assertEqual(state["status"], "blocked")
+            self.assertFalse(state["cluster_operations_performed"])
+
     def test_context_never_defaults_or_accepts_non_lab_names(self):
         for context in ("", "default", "production", "kind", "kind-vtep-affinity-lab/other", "kind-vtep-affinity-lab;cmd"):
             with self.assertRaises(ValueError):

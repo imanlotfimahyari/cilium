@@ -355,14 +355,21 @@ def main():
     parser.add_argument("--external-client", default="198.18.0.9/32", help="shared isolated /32 client address; must not overlap cluster ranges")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
-    context_guard(args.context)
+    # A rejected invocation must not leave a previous run's PASS on disk.
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    args.report.write_text(json.dumps({"status": "blocked", "reason": "preflight not completed",
+                                       "cluster_operations_performed": False, "checks": []}, indent=2)+"\n")
+    try:
+        context_guard(args.context)
+        lab = Lab(args)
+    except ValueError:
+        parser.error("invalid disposable-lab arguments; no cluster operations were performed")
     missing = [name for name in (["kubectl", "docker"] if args.external_peer else ["kubectl"]) if not shutil.which(name)]
     if missing:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps({"status": "blocked", "reason": "required tools unavailable: " + ", ".join(missing),
                                            "cluster_operations_performed": False, "checks": []}, indent=2)+"\n")
         parser.error("required tools unavailable; no cluster operations were performed")
-    lab = Lab(args)
     result = {"scope": "native IPv4 TCP, real CNI/identity/policy/lifecycle", "external_peers_requested": bool(args.external_peer), "status": "failed"}
     try:
         lab.validate()
