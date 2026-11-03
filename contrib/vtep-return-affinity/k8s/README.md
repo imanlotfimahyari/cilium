@@ -82,6 +82,9 @@ The older `extraConfig.enable-experimental-vtep-return-affinity` path is retaine
 use one configuration path. Combining it with the dedicated enabled value fails
 rendering. Drain selected pods with the compatible agent before disabling or
 rolling back; changing a Helm value is not a drain or state migration.
+The flag is startup-only: restart/roll agents after updating it on an existing
+installation. The chart retains `rollOutCiliumPods=false` by default; a
+ConfigMap-only update does not activate the feature. Drain first when disabling.
 The dedicated default false value preserves a legacy `extraConfig` setting;
 disable/remove the legacy key when migrating or disabling that configuration.
 Draining alone does not prove compatibility with an older journal format;
