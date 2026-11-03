@@ -274,7 +274,11 @@ class Lab:
             self.run("delete", "pod", "-n", self.args.cilium_namespace, old["metadata"]["name"], "--wait=false")
             self.wait(lambda: self.agent(node, old["metadata"]["uid"]), "replacement agent readiness", 600)
             self.wait(lambda: self.selected_endpoint(server), "restored selected endpoint", 300)
-            after = self.wait(lambda: (p if (p := self.progress()) and p["requests"] > before["requests"]+3 else None), "existing TCP progress")
+            # Require fresh progress after readiness, not a stale state file
+            # written while the agent was down or still restoring endpoints.
+            restored = self.wait(self.progress, "post-restore TCP checkpoint")
+            external_restored = self.wait(self.external.progress, "post-restore external checkpoints") if self.external else None
+            after = self.wait(lambda: (p if (p := self.progress()) and p["requests"] > restored["requests"]+3 else None), "existing TCP progress after restore")
             if after["connection"] != before["connection"] or self.hold.poll() is not None:
                 raise RuntimeError("agent restart did not preserve the same TCP connection")
             self.verify_policy(server)
@@ -282,7 +286,7 @@ class Lab:
             if self.external:
                 def external_progress():
                     records = self.external.progress()
-                    if not records or any(p["requests"] <= b["requests"]+3 for p, b in zip(records, external_before)):
+                    if not records or any(p["requests"] <= b["requests"]+3 for p, b in zip(records, external_restored)):
                         return None
                     if any(p["connection"] != b["connection"] for p, b in zip(records, external_before)):
                         raise RuntimeError("external connection reconnected during agent restart")
@@ -290,6 +294,7 @@ class Lab:
                 self.wait(external_progress, "both external TCP connections survive agent restart")
                 self.record("agent restart preserves simultaneous external-peer TCP connections without reconnect")
                 self.external.close()
+                self.verify_external(server)
         previous = server["metadata"]["uid"]
         self.run("delete", "pod", "-n", self.ns, server["metadata"]["name"], "--wait=false")
         server = self.wait(lambda: self.server(previous_uid=previous), "replacement workload pod", 300)

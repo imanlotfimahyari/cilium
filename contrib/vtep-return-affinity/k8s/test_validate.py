@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location("validate", Path(__file__).with_name("validate.py"))
 validate = importlib.util.module_from_spec(spec)
@@ -90,6 +91,59 @@ class LabSafetyTests(unittest.TestCase):
         lab.run = lambda *args, **kw: attempts.append(args[0])
         with self.assertRaises(RuntimeError): lab.close()
         self.assertEqual(attempts, ["delete", "uncordon"])
+
+    def test_restart_rejects_stale_progress_and_reconnections(self):
+        for reconnect in (False, True):
+            with self.subTest(reconnect=reconnect):
+                lab = validate.Lab(SimpleNamespace(context="kind-vtep-affinity-lab", cilium_namespace="kube-system",
+                                                  restart_agent=True, drain_node=False))
+                nodes = [{"metadata": {"name": n, "labels": {validate.LAB_LABEL: "true"}}, "spec": {}} for n in ("a", "b")]
+                lab.get = lambda *args: {"items": nodes}
+                server = {"metadata": {"name": "server", "uid": "old"}, "spec": {"nodeName": "a"}}
+                lab.deploy = lambda nodes: server
+                lab.server = lambda **kwargs: server
+                lab.selected_endpoint = lambda pod: True
+                lab.client_pod = lambda role: {"metadata": {"name": role}}
+                lab.verify_policy = lambda pod: "192.0.2.2:8080"
+                lab.verify_external = Mock(return_value="192.0.2.2:8080")
+                lab.agent = lambda node, previous_uid=None: {"metadata": {"name": "agent", "uid": "new" if previous_uid else "old"}}
+                lab.run = lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", "")
+                native_reads = []
+                native_values = iter([3, 10, 10, 14])
+                def progress():
+                    count = next(native_values)
+                    native_reads.append(count)
+                    return {"requests": count, "connection": "native"}
+                lab.progress = progress
+                class Peers:
+                    client = "198.18.0.9"
+                    reads = []
+                    values = iter([3, 10, 10, 14])
+                    def preflight(self): pass
+                    def start(self, target): pass
+                    def close(self): pass
+                    def progress(self):
+                        count = next(self.values)
+                        self.reads.append(count)
+                        return [{"requests": count, "connection": ("reconnected" if reconnect and count == 14 else str(i))} for i in range(2)]
+                lab.external = Peers()
+                def wait(predicate, *args):
+                    for _ in range(8):
+                        result = predicate()
+                        if result: return result
+                    raise RuntimeError("mock wait exhausted")
+                lab.wait = wait
+                process = Mock()
+                process.poll.return_value = None
+                with patch.object(validate.subprocess, "Popen", return_value=process):
+                    if reconnect:
+                        with self.assertRaisesRegex(RuntimeError, "reconnected"):
+                            lab.validate()
+                    else:
+                        lab.validate()
+                        self.assertEqual(lab.verify_external.call_count, 3)
+                self.assertEqual(native_reads, [3, 10, 10, 14])
+                self.assertEqual(lab.external.reads, [3, 10, 10, 14])
 
 
 if __name__ == "__main__":
