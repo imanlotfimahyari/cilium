@@ -4,6 +4,10 @@
 package types
 
 const (
+	// PropertyVTEPReturnAffinity persists selection across agent restarts. Only
+	// synchronous CNI creation may select a namespace; regeneration cannot.
+	PropertyVTEPReturnAffinity = "experimental-vtep-return-affinity"
+
 	// PropertyFakeEndpoint marks the endpoint as being "fake". By "fake" it
 	// means that it doesn't have any datapath bpf programs regenerated.
 	PropertyFakeEndpoint = "property-fake-endpoint"
