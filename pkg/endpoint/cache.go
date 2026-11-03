@@ -45,6 +45,8 @@ type epInfoCache struct {
 	ifIndex                int
 	parentIfIndex          int
 	netNsCookie            uint64
+	containerNetnsPath     string
+	containerIfName        string
 	rtInfo                 uint32
 	properties             map[string]any
 	k8sNamespace           string
@@ -72,6 +74,7 @@ func (e *Endpoint) createEpInfoCache(epdir string) *epInfoCache {
 			ipv4:         e.IPv4Address(),
 			ipv6:         e.IPv6Address(),
 			atHostNS:     true,
+			options:      e.Options.DeepCopy(),
 			properties:   maps.Clone(e.properties),
 			k8sNamespace: e.GetK8sNamespace(),
 			k8sPodName:   e.GetK8sPodName(),
@@ -99,6 +102,8 @@ func (e *Endpoint) createEpInfoCache(epdir string) *epInfoCache {
 		ifIndex:                e.ifIndex,
 		parentIfIndex:          e.parentIfIndex,
 		netNsCookie:            e.NetNsCookie,
+		containerNetnsPath:     e.containerNetnsPath,
+		containerIfName:        e.containerIfName,
 		rtInfo:                 e.rtInfo,
 		properties:             maps.Clone(e.properties),
 		k8sNamespace:           e.GetK8sNamespace(),
@@ -150,6 +155,9 @@ func (ep *epInfoCache) GetIdentity() identity.NumericIdentity {
 func (ep *epInfoCache) GetEndpointNetNsCookie() uint64 {
 	return ep.netNsCookie
 }
+
+func (ep *epInfoCache) GetContainerNetnsPath() string     { return ep.containerNetnsPath }
+func (ep *epInfoCache) GetContainerInterfaceName() string { return ep.containerIfName }
 
 // Logger returns the logger for the endpoint that is being cached.
 func (ep *epInfoCache) Logger(subsystem string) *slog.Logger {

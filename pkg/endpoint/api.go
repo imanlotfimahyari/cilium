@@ -18,6 +18,7 @@ import (
 
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/endpoint/regeneration"
+	endpoint "github.com/cilium/cilium/pkg/endpoint/types"
 	identitymodel "github.com/cilium/cilium/pkg/identity/model"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/labels/model"
@@ -139,6 +140,12 @@ func NewEndpointFromChangeModel(p EndpointParams, dnsRulesAPI DNSRulesAPI, proxy
 
 	if model.Properties != nil {
 		ep.properties = model.Properties
+	}
+	delete(ep.properties, endpoint.PropertyVTEPReturnAffinity)
+	if option.Config.EnableExperimentalVTEPReturnAffinity && model.SyncBuildEndpoint &&
+		ep.IPv4.IsValid() && !ep.IPv6.IsValid() && model.ContainerNetnsPath != "" &&
+		model.ContainerInterfaceName != "" && ep.NetNsCookie != 0 {
+		ep.properties[endpoint.PropertyVTEPReturnAffinity] = true
 	}
 
 	return ep, nil
