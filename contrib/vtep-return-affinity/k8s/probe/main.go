@@ -1,3 +1,4 @@
+// This file was not reviewed by a human before submission
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
@@ -10,12 +11,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -42,14 +46,15 @@ func main() {
 	target := flag.String("target", ":8080", "TCP address")
 	state := flag.String("state", "/tmp/session.json", "hold progress file")
 	timeout := flag.Duration("timeout", 2*time.Second, "per-request timeout")
+	source := flag.String("source", "", "optional explicit IPv4 client address and port")
 	flag.Parse()
-	if err := run(*mode, *target, *state, *timeout); err != nil {
+	if err := run(*mode, *target, *state, *timeout, *source); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(mode, target, state string, timeout time.Duration) error {
+func run(mode, target, state string, timeout time.Duration, source string) error {
 	if mode == "read-state" {
 		b, err := os.ReadFile(state)
 		if err == nil {
@@ -91,8 +96,19 @@ func run(mode, target, state string, timeout time.Duration) error {
 	if mode != "request" && mode != "hold" {
 		return fmt.Errorf("unknown mode")
 	}
-	c, err := net.DialTimeout("tcp4", target, timeout)
+	dialer := net.Dialer{Timeout: timeout}
+	if source != "" {
+		local, err := netip.ParseAddrPort(source)
+		if err != nil || !local.Addr().Is4() || local.Addr().IsUnspecified() || local.Port() == 0 {
+			return fmt.Errorf("invalid explicit IPv4 client address")
+		}
+		dialer.LocalAddr = net.TCPAddrFromAddrPort(local)
+	}
+	c, err := dialer.Dial("tcp4", target)
 	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			return fmt.Errorf("TCP client setup failed")
+		}
 		return fmt.Errorf("TCP connection failed")
 	}
 	defer c.Close()
