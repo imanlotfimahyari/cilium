@@ -2,6 +2,11 @@
 
 # Experimental IPv4/TCP VXLAN return affinity
 
+**v29 lab integration:** the fork chart exposes the default-off existing flag
+with render guards, and fresh current-agent lifecycle runs pass on both kernels.
+Real Kubernetes/image execution and native performance remain blocked.
+See [v29 evidence and exact scope](VALIDATION-v29.md).
+
 **v28 local/kernel checkpoint:** optional external Docker peers extend the disposable
 Kubernetes harness; read-only diagnostics identify pressure by map stage and
 observed headroom. Both kernel matrices and focused host tests pass; cluster execution remains pending.

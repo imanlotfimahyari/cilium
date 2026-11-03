@@ -2,6 +2,12 @@
 
 # Checkpoint workflow
 
+v29 adds render-tested, default-off Helm lab integration without changing the
+agent/BPF runtime. Fresh current-agent lifecycle runs pass on both kernels,
+including SIGKILL/restart, fresh GC, replacement and drain/disable. Cross-version
+evidence remains v27; real Kubernetes and native measurements remain blocked.
+See VALIDATION-v29.md.
+
 v28 extends the external Kubernetes fixture and read-only pressure diagnostics,
 then fixes stale restart/progress and report evidence. Host unit/race, offline
 harness and both kernel matrices pass. No BPF runtime or hook/map change occurs;
