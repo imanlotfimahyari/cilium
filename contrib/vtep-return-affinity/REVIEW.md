@@ -1,4 +1,25 @@
+<!-- This file was not reviewed by a human before submission -->
+
 # Design review and remaining implementation gates
+
+## Current review state (v28)
+
+The earlier sections below describe historical design decisions and gates.
+They do not override the current [supported contract](README.md#supported-lab-contract)
+or [executed v27 evidence](VALIDATION-v27.md). In particular, managed TIME-WAIT,
+external SYN-cookie binding and rebuilt v26/v27 lifecycle transitions have
+passed the recorded two-kernel lab tests. No new hook or map is added by v28.
+
+Remaining gates are combined Kubernetes/CNI/normal-identity/policy execution,
+external peers in that cluster, native operational/performance measurements,
+wider kernel/version compatibility and independent human architectural review.
+The Kubernetes external-peer extension is implemented and offline-tested only.
+Read-only pressure diagnostics distinguish map stages and observed headroom;
+they cannot attribute insertion failures without dedicated runtime counters.
+No further safe hook removal has been established. The old CT/guard experiment
+was already removed; repeating that cleanup is unnecessary.
+
+## Historical review notes
 
 This is experimental source, not an upstream-approved feature. No public PR,
 maintainer message, acceptance or maintenance commitment is implied.

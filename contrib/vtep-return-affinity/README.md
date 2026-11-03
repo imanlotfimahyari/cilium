@@ -2,6 +2,13 @@
 
 # Experimental IPv4/TCP VXLAN return affinity
 
+**v28 local/kernel checkpoint:** optional external Docker peers extend the disposable
+Kubernetes harness; read-only diagnostics identify pressure by map stage and
+observed headroom. Both kernel matrices and focused host tests pass; cluster execution remains pending.
+See [v28 validation](VALIDATION-v28.md) and [Kubernetes instructions](k8s/README.md).
+Upstream main `26d69186dd` was merged as `7f9316a60f`; its two netperf-workflow
+commits do not change the runtime source covered by the v27 validation below.
+
 **Recovered v27:** upstream `main` at `2e94a0a3e3` and the previous v27
 implementation have been reconstructed and published on the separate
 `experimental/vtep-return-affinity-main-v27` branch. Both kernel packet/controller
@@ -90,7 +97,8 @@ See [TIME-WAIT behavior](TIMEWAIT.md) and [v15 validation](VALIDATION-v15.md).
 Kubernetes remains deferred to the final real-cluster checkpoint.
 
 Original baseline: Cilium `fe561573e0a8adc43bacbcc70bda0c9e01d6676d`.
-Current integration baseline: upstream `2e94a0a3e3bddb960f6e403b61afa70da10ba561`.
+Current integration baseline: upstream `26d69186dd96431265a44b68f72ba5db110f364f`.
+Recorded v27 runtime-build baseline: `2e94a0a3e3bddb960f6e403b61afa70da10ba561`.
 Use case: [cilium/cilium#46159](https://github.com/cilium/cilium/issues/46159).
 No public PR or maintainer message has been created. This is not production
 ready or accepted upstream. See [design review](REVIEW.md) and

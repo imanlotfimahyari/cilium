@@ -1,4 +1,13 @@
+<!-- This file was not reviewed by a human before submission -->
+
 # Operational hardening and hook/map review
+
+**v28 read-only diagnostic:** each map now identifies its stage (admission,
+request binding, cookie/TIME-WAIT handoff or runtime), observed headroom, and
+`full_at_sample`, `available_at_sample` or `unknown`. Failed enumeration and
+socket storage remain unknown. These fields are not insertion-failure counters,
+memory budgets, reserved capacity or health verdicts. Explicit JSON limitations
+retain those distinctions. No BPF code, map layout or hook changes are required.
 
 **v25 validated lifecycle:** schema 3 has 18 maps and eight managed tracing
 hooks, plus sockops, pod ingress/pre-queue TCX and retirement guards. Cookie

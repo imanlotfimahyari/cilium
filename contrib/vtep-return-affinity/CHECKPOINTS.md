@@ -2,6 +2,11 @@
 
 # Checkpoint workflow
 
+v28 extends the external Kubernetes fixture and read-only pressure diagnostics,
+then fixes stale restart/progress and report evidence. Host unit/race, offline
+harness and both kernel matrices pass. No BPF runtime or hook/map change occurs;
+real Kubernetes and native performance remain pending. See VALIDATION-v28.md.
+
 Recovered v27 source `691819609b` matches the previous production tree exactly.
 Fixture `bd5f35ae81` restores distinct cookie probe tuples per version transition.
 All 119 files are published with an identical tree on the separate main-v27
