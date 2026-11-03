@@ -44,18 +44,49 @@ endpoint routes, IPsec/WireGuard and unsupported translations for this test.
 Supply reachable Kubernetes API host/port when using kube-proxy replacement.
 Keep normal identity allocation and Kubernetes NetworkPolicy enabled.
 
-Enable the feature through the existing `extraConfig` Helm map:
+With this fork's chart, enable the existing agent flag through the dedicated
+default-off value. Supply this fork's patched agent image; the upstream image
+does not contain the experiment. These are early chart guards, not proof of
+kernel compatibility or successful cluster execution.
 
 ```yaml
-extraConfig:
-  enable-experimental-vtep-return-affinity: "true"
+vtep:
+  enabled: true
+  experimentalReturnAffinity:
+    enabled: true
+kubeProxyReplacement: true
+routingMode: tunnel
+tunnelProtocol: vxlan
+underlayProtocol: ipv4
+ipv4:
+  enabled: true
+ipv6:
+  enabled: false
+bpf:
+  datapathMode: veth
+  enableTCX: true
+  hostLegacyRouting: false
+l7Proxy: false
+endpointRoutes:
+  enabled: false
+encryption:
+  enabled: false
 ```
 
 Also enable/configure the existing `vtep` values with exact peer addresses, MACs,
 CIDRs and mask appropriate to the isolated lab. They must not overlap Kubernetes
 node/pod/service ranges for this native-path checkpoint. The feature rejects an
-empty peer set even though this harness does not send external-peer traffic.
+empty peer set even when running only the native-path checkpoint.
 Do not reuse production peer definitions or cluster credentials in this lab.
+The older `extraConfig.enable-experimental-vtep-return-affinity` path is retained;
+use one configuration path. Combining it with the dedicated enabled value fails
+rendering. Drain selected pods with the compatible agent before disabling or
+rolling back; changing a Helm value is not a drain or state migration.
+The dedicated default false value preserves a legacy `extraConfig` setting;
+disable/remove the legacy key when migrating or disabling that configuration.
+Draining alone does not prove compatibility with an older journal format;
+follow [the prototype downgrade procedure](../DOWNGRADE.md). Arbitrary older
+Cilium releases remain outside the tested transition contract.
 
 After selecting that explicit lab context, label its nodes:
 
@@ -147,3 +178,35 @@ The two operator-created containers remain for inspection; remove them manually
 afterwards with `docker rm -f affinity-peer-a affinity-peer-b`. Peer addresses,
 MACs and connection identifiers are not included in the JSON report. A test
 failure can leave fixtures requiring inspection; never run this on production.
+
+## Execution evidence and hardware boundary
+
+Image assembly requires a working local Docker daemon. The live harness also
+requires an accessible, preconfigured disposable cluster. Missing tools produce
+a blocked report before any cluster operations. Neither offline unit tests nor
+the disconnected full-daemon VMs establish that these images or Kubernetes
+scenarios have executed successfully.
+
+The optional Docker-peer fixture is designed for kind nodes sharing one local
+bridge. It does not provision external peers for a multi-host native cluster.
+That topology needs independently reachable peer machines/containers and an
+appropriate execution adapter before claiming external-peer deployment coverage.
+
+Native performance needs controlled hardware (or explicitly documented hardware
+virtualization), fixed resource allocations, a recorded kernel/NIC/offload
+configuration and repeatable feature-off/on comparisons. First pass functional
+checks, then measure throughput, request/connection latency, handshake rate,
+agent/system CPU, memory and admission-pressure behavior. Repeat both arms and
+report variation, errors and workload/topology parameters. Use traffic/topologies
+supported by both modes for overhead comparisons; measure overlapping-peer
+availability separately from that baseline. Unknown ownership
+must still drop and occupied ownership must not be evicted under pressure.
+Recreate/drain selected pods between arms according to the lifecycle contract.
+Emulated elapsed times, same-host kind results and measurements from shared
+CI machines must not be presented as production multi-node performance.
+
+The actual-agent VM fixture covers restart, replacement and coordinated disable
+without Kubernetes; its allocator remains the explicit no-policy test allocator.
+Human review, real identity/policy/CNI execution and hardware validation are
+separate gates. No cloud resources or native lab hosts are provisioned by this
+runbook.
