@@ -1,4 +1,5 @@
 {
+  "$comment": "This file was not reviewed by a human before submission",
   "properties": {
     "MTU": {
       "type": "integer"
@@ -6793,6 +6794,14 @@
         },
         "endpoint": {
           "type": "string"
+        },
+        "experimentalReturnAffinity": {
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
         },
         "mac": {
           "type": "string"

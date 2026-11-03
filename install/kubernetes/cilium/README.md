@@ -1,3 +1,5 @@
+<!-- This file was not reviewed by a human before submission -->
+
 # cilium
 
 ![Version: 1.21.0-dev](https://img.shields.io/badge/Version-1.21.0--dev-informational?style=flat-square) ![AppVersion: 1.21.0-dev](https://img.shields.io/badge/AppVersion-1.21.0--dev-informational?style=flat-square)
@@ -48,6 +50,28 @@ offer from the [Getting Started Guides page](https://docs.cilium.io/en/stable/ge
 The best way to get help if you get stuck is to ask a question on the
 [Cilium Slack channel](https://slack.cilium.io). With Cilium
 contributors across the globe, there is almost always someone available to help.
+
+## Experimental VXLAN return-affinity lab
+
+`vtep.experimentalReturnAffinity.enabled` is false by default and requires this
+fork's patched agent image. It enables the existing agent flag for newly created
+eligible pods; recreate existing pods to opt in. Kernel capability, pin/schema
+compatibility and runtime readiness are checked by the agent. Real Kubernetes
+and native performance validation remain pending.
+
+Use IPv4-only VXLAN/veth with TCX, BPF host routing and kube-proxy replacement;
+disable L7 proxies, endpoint routes and encryption. Configure exact VTEP peers
+before enabling and keep them unchanged while active. Use either this value or
+the existing `extraConfig` key, never both. Unsupported settings fail rendering.
+The default false value preserves any legacy `extraConfig` setting; disable or
+remove that legacy key when retiring it. False is not an override for that key.
+
+Before disabling or rolling back, stop new admissions and physically drain the
+selected pods. Let the compatible agent verify drain and remove its runtime;
+only then replace it with an incompatible/older binary. A Helm rollback alone
+cannot make live ownership state compatible. Never erase pins or history to
+force recovery. Recreate pods after enabling again. Helm cannot prove that
+this drain procedure has completed.
 
 ## Values
 
@@ -1102,6 +1126,7 @@ contributors across the globe, there is almost always someone available to help.
 | vtep.cidr | string | `""` | A space separated list of VTEP device CIDRs, for example "1.1.1.0/24 1.1.2.0/24" |
 | vtep.enabled | bool | `false` | Enables VXLAN Tunnel Endpoint (VTEP) Integration (beta) to allow Cilium-managed pods to talk to third party VTEP devices over Cilium tunnel. |
 | vtep.endpoint | string | `""` | A space separated list of VTEP device endpoint IPs, for example "1.1.1.1  1.1.2.1" |
+| vtep.experimentalReturnAffinity.enabled | bool | `false` | Experimental IPv4/TCP VXLAN connection-specific return affinity for newly created veth pods. Requires the patched agent, compatible kernel tracing, TCX, BPF host routing and kube-proxy replacement. Drain selected pods before disabling, changing peers or rolling back. Not validated in a real cluster. |
 | vtep.mac | string | `""` | A space separated list of VTEP device MAC addresses (VTEP MAC), for example "x:x:x:x:x:x  y:y:y:y:y:y:y" |
 | vtep.mask | string | `""` | VTEP CIDRs Mask that applies to all VTEP CIDRs, for example "255.255.255.0" |
 | waitForKubeProxy | bool | `false` | Wait for KUBE-PROXY-CANARY iptables rule to appear in "wait-for-kube-proxy" init container before launching cilium-agent. More context can be found in the commit message of below PR https://github.com/cilium/cilium/pull/20123 |
