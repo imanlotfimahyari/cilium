@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
+// This file was not reviewed by a human before submission
 
 package loader
 
@@ -21,6 +22,7 @@ import (
 	"github.com/cilium/cilium/pkg/datapath/loader/types"
 	"github.com/cilium/cilium/pkg/datapath/prefilter"
 	"github.com/cilium/cilium/pkg/datapath/tables"
+	"github.com/cilium/cilium/pkg/datapath/vtep/returnaffinity"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/endpointstate"
 	"github.com/cilium/cilium/pkg/maps/callsmap"
@@ -44,6 +46,7 @@ type loader struct {
 	templateCache *objectCache
 
 	registry *registry.MapRegistry
+	affinity *returnaffinity.Controller
 
 	hostDpInitializedOnce sync.Once
 	hostDpInitialized     chan struct{}
@@ -76,6 +79,7 @@ type Params struct {
 	Devices            statedb.Table[*tables.Device]
 	EPRestorer         promise.Promise[endpointstate.Restorer]
 	BIGTCPConfig       bigtcp.Config
+	Affinity           *returnaffinity.Controller `optional:"true"`
 
 	// Force map initialisation before loader.
 	bpf.MapGroup
@@ -93,6 +97,7 @@ func newLoader(p Params) *loader {
 		logger:              p.Logger,
 		templateCache:       newObjectCache(p.Logger, p.ConfigWriter, filepath.Join(option.Config.StateDir, defaults.TemplatesDir)),
 		registry:            p.MapRegistry,
+		affinity:            p.Affinity,
 		sysctl:              p.Sysctl,
 		hostDpInitialized:   make(chan struct{}),
 		prefilter:           p.Prefilter,

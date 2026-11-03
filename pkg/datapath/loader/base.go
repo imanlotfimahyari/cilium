@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
+// This file was not reviewed by a human before submission
 
 package loader
 
@@ -337,6 +338,11 @@ func (l *loader) Reinitialize(ctx context.Context, lnc *config.Config, tunnelCon
 	// BPF file system setup.
 	if err := bpf.MkdirBPF(bpf.TCGlobalsPath()); err != nil {
 		return fmt.Errorf("failed to create bpffs directory: %w", err)
+	}
+	// Validate restore/disable and install the node socket hook before base
+	// programs or synchronous CNI endpoint builds can become reachable.
+	if err := l.initializeVTEPReturn(ctx, lnc, tunnelConfig); err != nil {
+		return err
 	}
 
 	// Datapath initialization
