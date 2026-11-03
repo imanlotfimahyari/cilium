@@ -1,4 +1,12 @@
+<!-- This file was not reviewed by a human before submission -->
+
 # Checkpoint workflow
+
+Recovered v27 source `691819609b` matches the previous production tree exactly.
+Fixture `bd5f35ae81` restores distinct cookie probe tuples per version transition.
+All 119 files are published with an identical tree on the separate main-v27
+branch. Fresh unit/build/race checks and both packet/controller matrices pass;
+actual-agent lifecycle validation remains in progress. See VALIDATION-v27.md.
 
 v26 `efccb8e9c7` closes the fresh-record periodic agent GC evidence gap on both
 reviewed kernels. Two real records are observed live, preserved until expiry

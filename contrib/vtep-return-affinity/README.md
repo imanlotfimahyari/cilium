@@ -1,4 +1,12 @@
+<!-- This file was not reviewed by a human before submission -->
+
 # Experimental IPv4/TCP VXLAN return affinity
+
+**Recovered v27:** upstream `main` at `2e94a0a3e3` and the previous v27
+implementation have been reconstructed and published on the separate
+`experimental/vtep-return-affinity-main-v27` branch. Both kernel packet/controller
+matrices pass. Full-agent upgrade/rollback and lifecycle validation is running.
+See [fresh recovery evidence and current gate](VALIDATION-v27.md).
 
 **v26:** both reviewed kernels now prove that the live agent collects newly
 issued cookie records after their real expiry while four established owners
@@ -81,7 +89,7 @@ See [TIME-WAIT behavior](TIMEWAIT.md) and [v15 validation](VALIDATION-v15.md).
 Kubernetes remains deferred to the final real-cluster checkpoint.
 
 Original baseline: Cilium `fe561573e0a8adc43bacbcc70bda0c9e01d6676d`.
-Current integration baseline: upstream `b28d80469415d4494a1a9d86ae18ee2de8a5146b`.
+Current integration baseline: upstream `2e94a0a3e3bddb960f6e403b61afa70da10ba561`.
 Use case: [cilium/cilium#46159](https://github.com/cilium/cilium/issues/46159).
 No public PR or maintainer message has been created. This is not production
 ready or accepted upstream. See [design review](REVIEW.md) and
