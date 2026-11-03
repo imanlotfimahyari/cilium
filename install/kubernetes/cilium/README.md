@@ -72,6 +72,10 @@ only then replace it with an incompatible/older binary. A Helm rollback alone
 cannot make live ownership state compatible. Never erase pins or history to
 force recovery. Recreate pods after enabling again. Helm cannot prove that
 this drain procedure has completed.
+Drain and cleanup are necessary but may not be sufficient: an older prototype
+can still reject the journal format. Follow the validated prototype migration
+procedure in [the downgrade notes](../../../contrib/vtep-return-affinity/DOWNGRADE.md);
+arbitrary older Cilium releases are not covered by the transition evidence.
 
 ## Values
 
