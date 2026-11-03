@@ -1,3 +1,4 @@
+{{- /* This file was not reviewed by a human before submission */ -}}
 {{- if and ( or (.Values.agent) (.Values.operator.enabled) .Values.clustermesh.useAPIServer) (not .Values.preflight.enabled) }}
 {{- /*  Default values with backwards compatibility */ -}}
 {{- $defaultBpfMapDynamicSizeRatio := 0.0 -}}
@@ -1301,6 +1302,9 @@ data:
 
 {{- if hasKey .Values "vtep" }}
   enable-vtep: {{ .Values.vtep.enabled | quote }}
+{{- if (dig "experimentalReturnAffinity" "enabled" false .Values.vtep) }}
+  enable-experimental-vtep-return-affinity: "true"
+{{- end }}
 {{- if hasKey .Values.vtep "endpoint" }}
   vtep-endpoint: {{ .Values.vtep.endpoint | quote }}
 {{- end }}

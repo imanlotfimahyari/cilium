@@ -1,3 +1,26 @@
+{{- /* This file was not reviewed by a human before submission */ -}}
+{{/* Early chart guard; kernel BTF/tracing and restore compatibility remain agent checks. */}}
+{{- if (dig "vtep" "experimentalReturnAffinity" "enabled" false .Values.AsMap) }}
+  {{- if or (not .Values.vtep.enabled) (not .Values.ipv4.enabled) .Values.ipv6.enabled
+      (ne (default "tunnel" .Values.routingMode) "tunnel")
+      (ne (default "vxlan" .Values.tunnelProtocol) "vxlan")
+      (ne (default "ipv4" .Values.underlayProtocol) "ipv4")
+      (ne .Values.bpf.datapathMode "veth") (not .Values.bpf.enableTCX)
+      .Values.bpf.hostLegacyRouting (ne (toString .Values.kubeProxyReplacement) "true")
+      .Values.l7Proxy .Values.endpointRoutes.enabled .Values.encryption.enabled }}
+    {{- fail "vtep.experimentalReturnAffinity.enabled requires vtep.enabled, IPv4-only VXLAN over IPv4, tunnel routing, veth/TCX, BPF host routing and kubeProxyReplacement=true; proxies, endpoint routes and encryption are unsupported" }}
+  {{- end }}
+  {{- if or .Values.cleanState .Values.cleanBpfState }}
+    {{- fail "vtep.experimentalReturnAffinity.enabled cannot be combined with cleanState or cleanBpfState; preserved ownership must not be erased" }}
+  {{- end }}
+  {{- if or (empty .Values.vtep.endpoint) (empty .Values.vtep.mac) (empty .Values.vtep.cidr) (empty .Values.vtep.mask) }}
+    {{- fail "vtep.experimentalReturnAffinity.enabled requires explicit vtep.endpoint, mac, cidr and mask" }}
+  {{- end }}
+  {{- if hasKey .Values.extraConfig "enable-experimental-vtep-return-affinity" }}
+    {{- fail "configure vtep.experimentalReturnAffinity.enabled or the extraConfig enable-experimental-vtep-return-affinity key, not both" }}
+  {{- end }}
+{{- end }}
+
 {{/* validate deprecated options are not being used */}}
 
 {{/* Options removed in v1.18 */}}
