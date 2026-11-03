@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/bits"
 	"os"
 	"path"
@@ -256,8 +257,27 @@ func LoadCollection(logger *slog.Logger, spec *ebpf.CollectionSpec, opts *Collec
 	}
 
 	fixed := fixedResources(spec, opts.Keep)
+	// Replacement descriptors can include maps used only by programs which
+	// reachability analysis just removed. Record only originally declared
+	// names: an unknown replacement must still be rejected by ebpf-go.
+	var prunableReplacements []string
+	for name := range opts.CollectionOptions.MapReplacements {
+		if spec.Maps[name] != nil {
+			prunableReplacements = append(prunableReplacements, name)
+		}
+	}
 	if err := removeUnusedMaps(spec, fixed, reach, logger); err != nil {
 		return nil, nil, fmt.Errorf("pruning unused maps: %w", err)
+	}
+	if len(prunableReplacements) > 0 {
+		copyOpts := *opts
+		copyOpts.CollectionOptions.MapReplacements = maps.Clone(opts.CollectionOptions.MapReplacements)
+		for _, name := range prunableReplacements {
+			if spec.Maps[name] == nil {
+				delete(copyOpts.CollectionOptions.MapReplacements, name)
+			}
+		}
+		opts = &copyOpts
 	}
 
 	if err := dumpConstants(spec, opts); err != nil {
