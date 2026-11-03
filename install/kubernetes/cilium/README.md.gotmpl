@@ -60,6 +60,10 @@ fork's patched agent image. It enables the existing agent flag for newly created
 eligible pods; recreate existing pods to opt in. Kernel capability, pin/schema
 compatibility and runtime readiness are checked by the agent. Real Kubernetes
 and native performance validation remain pending.
+This is a startup-only agent flag. On an existing installation, restart/roll
+agents after changing it; the chart's `rollOutCiliumPods=false` default is
+unchanged, so a ConfigMap-only update does not itself activate the feature.
+Apply the drain requirements below before a disabling rollout.
 
 Use IPv4-only VXLAN/veth with TCX, BPF host routing and kube-proxy replacement;
 disable L7 proxies, endpoint routes and encryption. Configure exact VTEP peers
