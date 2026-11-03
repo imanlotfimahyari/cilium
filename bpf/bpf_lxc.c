@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /* Copyright Authors of Cilium */
+/* This file was not reviewed by a human before submission */
 
 #include <bpf/ctx/skb.h>
 #include <bpf/api.h>
@@ -52,6 +53,10 @@
 #include "lib/vtep.h"
 #include "lib/subnet.h"
 #include "lib/socket_lb.h"
+
+#ifdef ENABLE_VTEP_RETURN_SOCKET_AFFINITY
+#include "lib/vtep_return_core.h"
+#endif
 
 static __always_inline __maybe_unused int
 lxc_deliver_to_host(struct __ctx_buff *ctx, __u32 src_sec_identity)
@@ -1100,6 +1105,25 @@ ipv4_forward_to_destination(struct __ctx_buff *ctx, struct iphdr *ip4,
 {
 	struct remote_endpoint_info __maybe_unused fake_info = {0};
 	int ret;
+#ifdef ENABLE_VTEP_RETURN_SOCKET_AFFINITY
+	bool native_local_host = false;
+#endif
+
+#ifdef ENABLE_VTEP_RETURN_SOCKET_AFFINITY
+	if (ip4->protocol == IPPROTO_TCP) {
+		void *data, *data_end;
+
+		if (proxy_port || from_l7lb || hairpin_flow || ct_state->loopback ||
+		    ct_state->rev_nat_index || ct_state->nat_port || ct_state->proxy_redirect)
+			return DROP_INVALID;
+		ret = vtep_core_reply4(ctx, trace);
+		if (ret != CTX_ACT_OK)
+			return ret;
+		/* Source-MAC restoration invalidates packet pointers. */
+		if (!revalidate_data(ctx, &data, &data_end, &ip4))
+			return DROP_INVALID;
+	}
+#endif
 
 	if (CONFIG(srv6_cfg).enable) {
 		const __u32 *vrf_id;
@@ -1190,6 +1214,17 @@ ipv4_forward_to_destination(struct __ctx_buff *ctx, struct iphdr *ip4,
 								    bpf_htons(ETH_P_IP),
 								    trace);
 
+#ifdef ENABLE_VTEP_RETURN_SOCKET_AFFINITY
+				/* Native ownership has already been checked. Preserve
+				 * Cilium's ordinary local-stack delivery for an exact
+				 * host address (including kubelet TCP probes). This is
+				 * not permission to route arbitrary external prefixes
+				 * through the ownership-unaware legacy host path.
+				 */
+				if (ip4->protocol == IPPROTO_TCP && (ep->flags & ENDPOINT_F_HOST))
+					native_local_host = true;
+#endif
+
 				goto pass_to_stack;
 			}
 
@@ -1206,7 +1241,8 @@ ipv4_forward_to_destination(struct __ctx_buff *ctx, struct iphdr *ip4,
 	 * stack to bpf_host for VTEP redirection. When L7 proxy enabled, but no
 	 * L7 policy applied to pod, VTEP redirection also happen here.
 	 */
-	if (HAVE_ENCAP && CONFIG(enable_vtep)) {
+	if (HAVE_ENCAP && CONFIG(enable_vtep) &&
+	    (!is_defined(ENABLE_VTEP_RETURN_SOCKET_AFFINITY) || ip4->protocol != IPPROTO_TCP)) {
 		struct vtep_key vkey = {
 			.vtep_ip = ip4->daddr & CONFIG(vtep_mask),
 		};
@@ -1310,6 +1346,14 @@ ipv4_forward_to_destination(struct __ctx_buff *ctx, struct iphdr *ip4,
 	}
 
 pass_to_stack: __maybe_unused
+#ifdef ENABLE_VTEP_RETURN_SOCKET_AFFINITY
+	/* The host's legacy prefix route has no socket-ownership verdict. Native
+	 * TCP must use a direct BPF delivery path or fail closed, never pass into
+	 * an unaware host path that can reinterpret the overlapping prefix.
+	 */
+	if (ip4->protocol == IPPROTO_TCP && !native_local_host)
+		return DROP_NO_FIB;
+#endif
 	/* With per-endpoint routes, the `cil_lxc_policy_egress` will be
 	 * tail called from cil_to_container for packets sent by a L7 LB.
 	 * In case of a local backend, we execute this code already from the
@@ -2161,6 +2205,17 @@ ipv4_policy(struct __ctx_buff *ctx, struct iphdr *ip4, __u32 src_label,
 
 		break;
 	}
+
+#ifdef ENABLE_VTEP_RETURN_SOCKET_AFFINITY
+	/* Ingress verdict precedes admission; admission precedes publishing CT.
+	 * Local delivery has already completed its Ethernet source rewrite.
+	 */
+	verdict = vtep_core_admit4(ctx, from_tunnel, src_label, *proxy_port,
+				   ct_state->rev_nat_index || ct_state->nat_port ||
+				   ct_state->loopback || ct_state_new.loopback);
+	if (IS_ERR(verdict))
+		return verdict;
+#endif
 
 	if (ret == CT_NEW) {
 #if defined(ENABLE_NODEPORT)
