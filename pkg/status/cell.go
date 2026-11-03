@@ -24,6 +24,7 @@ import (
 	ipsec "github.com/cilium/cilium/pkg/datapath/linux/ipsec/types"
 	datapathTables "github.com/cilium/cilium/pkg/datapath/tables"
 	"github.com/cilium/cilium/pkg/datapath/tunnel"
+	"github.com/cilium/cilium/pkg/datapath/vtep/returnaffinity"
 	"github.com/cilium/cilium/pkg/health"
 	hubblecell "github.com/cilium/cilium/pkg/hubble/cell"
 	hubblemetricscell "github.com/cilium/cilium/pkg/hubble/metrics/cell"
@@ -101,11 +102,12 @@ type statusParams struct {
 
 	ClusterSizeDependantInterval node.ClusterSizeDependantIntervalFunc
 
-	PolicyMapFactory policymap.Factory
-	TunnelConfig     tunnel.Config
-	WireguardAgent   wgTypes.Agent
-	ZtunnelConfig    zconfig.Config
-	ConnectorConfig  connector.Config
+	PolicyMapFactory   policymap.Factory
+	TunnelConfig       tunnel.Config
+	WireguardAgent     wgTypes.Agent
+	ZtunnelConfig      zconfig.Config
+	ConnectorConfig    connector.Config
+	VTEPReturnAffinity *returnaffinity.Controller `optional:"true"`
 }
 
 // Config is the collector configuration
