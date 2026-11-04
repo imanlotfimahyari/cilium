@@ -2581,6 +2581,8 @@ egressGateway:
   # -- Maximum number of entries in egress gateway policy map
   # maxPolicyEntries: 16384
 vtep:
+  # Fork installation example, including images and peer inputs:
+  # examples/values-eks-vtep-affinity.yaml and examples/INSTALL-VTEP.md.
   experimentalReturnAffinity:
     # -- Experimental IPv4/TCP VXLAN connection-specific return affinity for newly
     # created veth pods. Requires the patched agent, compatible kernel tracing,

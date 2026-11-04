@@ -53,6 +53,12 @@ contributors across the globe, there is almost always someone available to help.
 
 ## Experimental VXLAN return-affinity lab
 
+The complete default values remain in `values.yaml`, including the fields below.
+Use [the EKS/VTEP example values](examples/values-eks-vtep-affinity.yaml) as a
+small override file and follow [the build and install commands](examples/INSTALL-VTEP.md)
+to build the agent and operator from this branch, package this chart and install
+it with explicit image references. These examples are included in the chart package.
+
 `vtep.experimentalReturnAffinity.enabled` is false by default and requires this
 fork's patched agent image. It enables the existing agent flag for newly created
 eligible pods; recreate existing pods to opt in. Kernel capability, pin/schema
