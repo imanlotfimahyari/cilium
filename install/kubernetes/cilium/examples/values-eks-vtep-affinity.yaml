@@ -1,0 +1,74 @@
+# This file was not reviewed by a human before submission
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Authors of Cilium
+# Fork-only IPv4 EKS overlay example, not AWS ENI IPAM or AWS CNI chaining.
+# Edit REPLACE_WITH fields locally. CLI --set-string can supply image overrides.
+k8sServiceHost: "REPLACE_WITH_EKS_API_HOST_WITHOUT_HTTPS"
+k8sServicePort: "443"
+
+image:
+  override: "REPLACE_WITH_PATCHED_AGENT_IMAGE"
+  pullPolicy: IfNotPresent
+operator:
+  image:
+    override: "REPLACE_WITH_MATCHING_OPERATOR_GENERIC_IMAGE"
+    pullPolicy: IfNotPresent
+  replicas: 2
+
+cni:
+  install: true
+  exclusive: true
+  chainingMode: none
+eni:
+  enabled: false
+ipam:
+  mode: cluster-pool
+  operator:
+    clusterPoolIPv4PodCIDRList:
+      - "REPLACE_WITH_NONOVERLAPPING_IPV4_POD_CIDR"
+    clusterPoolIPv4MaskSize: 24
+ipv4:
+  enabled: true
+ipv6:
+  enabled: false
+routingMode: tunnel
+tunnelProtocol: vxlan
+underlayProtocol: ipv4
+tunnelPort: 8472
+kubeProxyReplacement: true
+bpf:
+  datapathMode: veth
+  enableTCX: true
+  hostLegacyRouting: false
+  masquerade: true
+enableIPv4Masquerade: true
+endpointRoutes:
+  enabled: false
+encryption:
+  enabled: false
+l7Proxy: false
+envoy:
+  enabled: false
+hubble:
+  enabled: false
+
+vtep:
+  # Both flags must be true to enable the experiment, after kernel validation.
+  enabled: false
+  experimentalReturnAffinity:
+    enabled: false
+  # Aligned, space-separated lists; exact trusted outer IP and VXLAN MAC pairs.
+  # Client CIDRs must not overlap this lab's node/pod/Service address ranges.
+  endpoint: ""
+  mac: ""
+  cidr: ""
+  mask: ""
+
+# The flag is startup-only; perform an explicit, coordinated agent rollout.
+rollOutCiliumPods: false
+cleanState: false
+cleanBpfState: false
+
+# Keep empty unless the reviewed running-kernel config is not in /proc/config.gz.
+# Then mount the host /boot read-only at /boot using the example in INSTALL-VTEP.md.
+extraHostPathMounts: []
