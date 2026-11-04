@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -29,7 +30,7 @@ class HelmAffinityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             values = Path(directory)/"values.json"
             values.write_text(json.dumps(overrides or {}))
-            cmd = [self.helm, "template", "affinity-lab", str(chart), "--namespace", "kube-system", "--values", str(values)]
+            cmd = [self.helm, "template", "affinity-lab", str(chart), "--namespace", "kube-system", "--kube-version", "1.35.0", "--values", str(values)]
             if config_only:
                 cmd += ["--show-only", "templates/cilium-configmap.yaml"]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
@@ -105,6 +106,48 @@ class HelmAffinityTests(unittest.TestCase):
         text = self.render(values).stdout
         self.assertEqual(text.count(FLAG+":"), 1)
         self.assertEqual(yaml.safe_load(text)["data"][FLAG], "true")
+
+    def test_eks_example_preserves_images_api_and_networking(self):
+        values = yaml.safe_load((CHART/"examples/values-eks-vtep-affinity.yaml").read_text())
+        values["k8sServiceHost"] = "api.example.com"
+        values["ipam"]["operator"]["clusterPoolIPv4PodCIDRList"] = ["10.240.0.0/16"]
+        values["image"]["override"] = "registry.example.com/lab/cilium:source-checkpoint"
+        values["operator"]["image"]["override"] = "registry.example.com/lab/operator-generic:source-checkpoint"
+        docs = [d for d in yaml.safe_load_all(self.render(values, config_only=False).stdout) if d]
+        config = next(d["data"] for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "cilium-config")
+        for key, value in {"ipam": "cluster-pool", "kube-proxy-replacement": "true",
+                           "routing-mode": "tunnel", "tunnel-protocol": "vxlan",
+                           "enable-ipv4": "true", "enable-ipv6": "false",
+                           "enable-tcx": "true", "enable-host-legacy-routing": "false",
+                           "enable-bpf-masquerade": "true", "cni-exclusive": "true",
+                           "enable-l7-proxy": "false"}.items():
+            self.assertEqual(config[key], value, key)
+        self.assertNotIn(FLAG, config)
+        for kind, name, container, image in [
+                ("DaemonSet", "cilium", "cilium-agent", values["image"]["override"]),
+                ("Deployment", "cilium-operator", "cilium-operator", values["operator"]["image"]["override"])]:
+            workload = next(d for d in docs if d["kind"] == kind and d["metadata"]["name"] == name)
+            spec = workload["spec"]["template"]["spec"]
+            self.assertTrue(spec["hostNetwork"])
+            actual = next(c for c in spec["containers"] if c["name"] == container)
+            self.assertEqual(actual["image"], image)
+            env = {e["name"]: e.get("value") for e in actual["env"]}
+            self.assertEqual(env["KUBERNETES_SERVICE_HOST"], "api.example.com")
+            self.assertEqual(env["KUBERNETES_SERVICE_PORT"], "443")
+        values["vtep"] = self.enabled()["vtep"]
+        self.assertEqual(yaml.safe_load(self.render(values).stdout)["data"][FLAG], "true")
+
+    def test_package_includes_full_values_and_install_examples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([self.helm, "package", str(CHART), "--destination", directory],
+                                    capture_output=True, text=True, timeout=45)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            packages = list(Path(directory).glob("cilium-*.tgz"))
+            self.assertEqual(len(packages), 1)
+            with tarfile.open(packages[0]) as package:
+                for path in ["values.yaml", "values.schema.json", "examples/values-eks-vtep-affinity.yaml",
+                             "examples/INSTALL-VTEP.md"]:
+                    self.assertEqual(package.extractfile("cilium/"+path).read(), (CHART/path).read_bytes(), path)
 
 
 if __name__ == "__main__":
