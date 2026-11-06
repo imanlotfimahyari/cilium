@@ -2,6 +2,10 @@
 
 # Checkpoint workflow
 
+This is a historical checkpoint index. Current capabilities, constraints and
+validation boundaries are maintained in [SUPPORT.md](SUPPORT.md). Former next-step
+statements below apply only to their named checkpoint.
+
 v29 adds render-tested, default-off Helm lab integration without changing the
 agent/BPF runtime. Fresh current-agent lifecycle runs pass on both kernels,
 including SIGKILL/restart, fresh GC, replacement and drain/disable. Cross-version

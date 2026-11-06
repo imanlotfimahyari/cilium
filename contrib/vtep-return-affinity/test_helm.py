@@ -16,7 +16,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 CHART = ROOT / "install/kubernetes/cilium"
 FLAG = "enable-experimental-vtep-return-affinity"
-BASELINE = "14a657076fc1e4eb176e272c8d7246851283692f"
+BASELINE = "7d0c8c64dbdba8e101b35cd502371ea762590183"
 
 
 class HelmAffinityTests(unittest.TestCase):
@@ -146,8 +146,19 @@ class HelmAffinityTests(unittest.TestCase):
             self.assertEqual(len(packages), 1)
             with tarfile.open(packages[0]) as package:
                 for path in ["values.yaml", "values.schema.json", "examples/values-eks-vtep-affinity.yaml",
-                             "examples/INSTALL-VTEP.md"]:
+                             "examples/INSTALL-VTEP.md", "examples/SUPPORT-VTEP.md"]:
                     self.assertEqual(package.extractfile("cilium/"+path).read(), (CHART/path).read_bytes(), path)
+
+    def test_upstream_spire_migration_and_shared_support_contract(self):
+        defaults = yaml.safe_load((CHART/"values.yaml").read_text())
+        self.assertNotIn("authentication", defaults)
+        self.assertIn("spire", defaults["encryption"]["ztunnel"])
+        legacy = {"authentication": {"mutual": {"spire": {"enabled": False}}}}
+        result = self.render(legacy, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("has moved to encryption.ztunnel.spire", result.stderr)
+        self.assertEqual((ROOT/"contrib/vtep-return-affinity/SUPPORT.md").read_bytes(),
+                         (CHART/"examples/SUPPORT-VTEP.md").read_bytes())
 
 
 if __name__ == "__main__":

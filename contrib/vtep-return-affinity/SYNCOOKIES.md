@@ -1,105 +1,52 @@
-# SYN-cookie child handoff: isolated capability checkpoint
+<!-- This file was not reviewed by a human before submission -->
 
-**v25 validated lifecycle:** the default-off agent now installs/restores the
-trusted external-VXLAN cookie path and collects its transient evidence. Schema 3
-requires drain/disable with an older binary before upgrade.
-See [v25 executed evidence](VALIDATION-v25.md). Historical probes and milestones
-below do not describe current enablement. Native-cookie, TFO, service/NAT and
-unreviewed kernel paths remain unsupported.
+# Agent-managed external VXLAN SYN-cookie ownership
 
-**v24:** the live VXLAN packet-to-child trust chain now passes on both reviewed
-kernels, with ordinary Cilium policy/CT, both listener families, real expiry and
-collision/replay/pressure checks. Agent-managed enablement/restoration and
-drain/disable are still the next gate. See [v24 scope](VALIDATION-v24.md).
+External-cookie forwarding and its lifecycle are implemented. Use
+[SUPPORT.md](SUPPORT.md) for exact kernel requirements, scope and evidence.
+The early v18 capability probe and v23 synthetic ledger are historical steps,
+not the current forwarding/agent status.
 
-**v23:** an isolated candidate ledger now tests bounded first-peer binding,
-collision quarantine, single consumption, replay/expiry and concurrent GC.
-The adapter supplies synthetic evidence; trusted SYN/SYN-ACK/ACK capture and
-child publication remain unimplemented. No production forwarding is enabled.
-See [v23 tests and required integration](VALIDATION-v23.md).
+## Trusted handoff
 
-## What v18 establishes
+1. Record the exact policy-approved external SYN origin and namespace generation.
+2. The checked kernel SYN-ACK producer records both initial sequence numbers and
+   exact constructed skb. A bounded first-peer ledger retains authority and
+   consumed/quarantined entries for the full reviewed kernel acceptance window.
+3. Verify the incoming ACK's exact peer and handshake evidence after normal
+   ingress policy. A pre-stack guard rejects stale consumption and cross-peer
+   borrowing before the kernel TCP path can reuse it.
+4. The checked `tcp_get_cookie_sock` return binds evidence to the exact live
+   kernel-created child, validating family/namespace/tuple/state/sequences.
+   No released request object is dereferenced after return.
+5. The passive-established callback publishes the actual child's socket cookie
+   and immutable ownership. Application data uses this socket owner; handshake
+   evidence is not an alternative application-data authorization path.
 
-Linux 6.8 and 6.12 can attach socket-local evidence to a successfully created
-cookie child before `BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB`. The isolated probe
-uses one temporary `fexit/tcp_get_cookie_sock` hook and a temporary sockops
-program. It does not select peers, permit packets, change routing, modify the
-production map schema or add a managed agent hook. The production experiment
-continues to reject SYN-cookie handshakes.
+The nonce/tuple alone grants no authority. Conflicting peer evidence cannot
+replace an occupied owner. Expiry collection removes pending records only after
+its acceptance window; established ownership is independent of ledger expiry.
+Runtime installation, pin reuse, collection, readiness and drain/disable are
+managed by the agent's canonical bundle.
 
-The loader checks the exact four-argument kernel BTF prototype and `sock *`
-return type before reading context slot four. The fexit probe filters the
-selected namespace inode, checks the child's namespace, tuple and SYN-RECV
-state, and compares the ACK's sequence numbers to the new TCP child's initial
-receive-next and send-unacknowledged values. It creates evidence on that exact
-socket with BPF socket storage. The passive-established callback then requires
-that marker, agrees on namespace/tuple/family, and records the kernel socket
-cookie. Userspace reads the marker through the accepted socket FD and verifies
-its cookie with `SO_COOKIE`.
+## Evidence and remaining boundary
 
-The probe never dereferences `request_sock` after return: the kernel may already
-have released it. CO-RE locates the selected fields. TCP-specific fields beyond
-the verifier's `sock` return type are read through checked kernel probe reads.
-No kernel object address is retained as a map key or value.
+The v24 packet fixtures exercise real forced-cookie VXLAN handshakes through
+normal Cilium policy/CT, both listener families, exact child publication,
+replay/collision, expiry and pressure. v25-v29 add managed runtime lifecycle and
+real agent periodic collection on the reviewed kernels. These reports do not
+establish AL2023 support, ordinary native SYN-cookie forwarding or EKS execution.
+The authoritative distinction is in [SUPPORT.md](SUPPORT.md).
 
-## Executed checks
+The kernel uses cookies to avoid retaining request state while this feature
+retains bounded peer evidence. SYN-flood availability, memory and native
+handshake throughput therefore require measurement. The common skb-release hook
+must invalidate temporary associations before address reuse, including drops.
 
-Both AF_INET listeners and AF_INET6 listeners accepting IPv4 pass all five cases
-on each kernel:
+## Implementation references
 
-| Case | Required evidence |
-| --- | --- |
-| Normal handshake, cookies disabled | Passive callback occurs without cookie-child evidence |
-| Forced kernel SYN cookies | `SyncookiesRecv` increases; marker creation precedes callback; FD cookie, namespace, tuple and family match; application data works |
-| Invalid raw ACK | Kernel `SyncookiesFailed` increases; no child evidence is created; the existing socket marker and application transfer survive |
-| Another namespace with the identical tuple | Its forced-cookie handshake works without acquiring or modifying selected-namespace evidence |
-| Exact tuple reuse after client reset | New cookie and independent evidence; old server FD retains its original marker; replacement transfers data |
-
-The same VM runs also retain the existing forced-cookie fail-closed tests for
-both listener families, through the synthetic handoff and actual Cilium
-policy/CT fixtures. Required subtests must explicitly PASS; no tests were skipped.
-See [v18 validation](VALIDATION-v18.md) for source and artifact fingerprints.
-
-These are direct-veth capability tests with trusted, isolated kernel hooks.
-They do not demonstrate VXLAN peer binding, tenant isolation, cookie forwarding,
-admission-pressure behavior or production kernel support.
-
-## Next implementation gate
-
-A successful cookie ACK proves the kernel accepted a TCP handshake; it does
-not identify the original outer VXLAN peer. Before enabling cookie forwarding:
-
-1. Bind the original policy-approved SYN ticket to the kernel-generated
-   SYN-ACK sequence evidence, namespace and generation. Require exact trusted
-   peer agreement on the incoming cookie ACK, with ordinary policy ordering.
-2. Make cross-peer collisions and retransmissions explicit. Never overwrite an
-   ambiguous proof with the latest SYN or infer ownership from a tuple/prefix.
-   Retention and any quarantine must cover the kernel's cookie acceptance
-   window; arbitrary short expiry must not permit an older ACK to acquire a
-   replacement peer.
-3. Bound every admission/proof structure without evicting surviving authority.
-   Define exhaustion, invalidation, duplicate use and late-callback behavior.
-   Cookies avoid keeping kernel request state; this feature would add state
-   back and must quantify its SYN-flood availability and memory cost.
-4. Publish the verified peer on the exact validated child before application
-   replies. Exercise cross-peer replay/collision, ACK-with-data, retransmission,
-   expiry and pressure. Then integrate managed installation, compatibility,
-   restart and drain/disable with the agent.
-
-The temporary probe hook is not automatically an acceptable production hook.
-Its compatibility and maintenance cost need review alongside the existing six
-TIME-WAIT hooks. No new production configuration API is introduced here.
-
-## Reviewed kernel sources
-
-- https://github.com/torvalds/linux/blob/v6.8/net/ipv4/syncookies.c
-- https://github.com/torvalds/linux/blob/v6.12/net/ipv4/syncookies.c
-- https://github.com/torvalds/linux/blob/v6.8/net/ipv4/tcp_ipv4.c
-- https://github.com/torvalds/linux/blob/v6.8/net/ipv4/tcp_input.c
-- https://github.com/torvalds/linux/blob/v6.8/net/ipv4/tcp_minisocks.c
-
-The cookie checker calls `tcp_get_cookie_sock` after cookie validation. The
-IPv4 receive path subsequently invokes `tcp_child_process`, which advances the
-child through the passive-established callback. The live tests validate this
-ordering on the supplied 6.8 and 6.12 builds rather than extrapolating it to
-other kernels.
+- `bpf/lib/vtep_return_cookie*.h`
+- `pkg/datapath/vtep/returnaffinity/cookie_targets.go`
+- `contrib/vtep-return-affinity/live/testdata/socket_cookie_core.c`
+- `contrib/vtep-return-affinity/live/testdata/cookie_runtime.c`
+- Recorded `VALIDATION-v24.md` through `VALIDATION-v29.md`

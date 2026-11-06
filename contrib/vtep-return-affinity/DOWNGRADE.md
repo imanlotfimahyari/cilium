@@ -1,4 +1,9 @@
+<!-- This file was not reviewed by a human before submission -->
+
 # Offline journal compatibility export
+
+Use [SUPPORT.md](SUPPORT.md) for the current map/journal contract and evidence.
+This utility has the narrow historical v2-to-v1 export scope described below.
 
 This utility addresses the v2-to-v1 journal format barrier between the v9+
 prototype and the v8 **feature-aware prototype**. It does not make rollback to
@@ -79,10 +84,13 @@ export/reimport and the unchanged physical-drain predicate against the kernel.
 These establish journal/controller compatibility; they are not evidence of an
 actual older daemon, reboot or Kubernetes rollout.
 
-## TIME-WAIT map schema 2
+## Current map compatibility
 
-v14 adds six TIME-WAIT maps to the versioned map bundle and six pinned tracing
-links. This is independent of journal format 2. No in-place migration or tracing
-code replacement is supported: drain selected pods and disable using the old
-binary before installing schema 2 or returning to the previous prototype. The
-offline journal converter does not migrate live maps, hooks or connections.
+The current bundle also includes the external-cookie runtime; its exact schema
+and attachment requirements are maintained in [SUPPORT.md](SUPPORT.md). Journal
+format compatibility is independent of map/program compatibility. No in-place
+migration or tracing-code replacement is established: drain selected pods and
+disable with the old compatible binary before an incompatible upgrade. This
+offline exporter does not migrate live maps, hooks or connections. Named rebuilt
+prototype transitions have separate historical v27 evidence; arbitrary released
+versions and real-cluster rollback remain outside that contract.

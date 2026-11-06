@@ -2,394 +2,106 @@
 
 # Experimental IPv4/TCP VXLAN return affinity
 
-**v29 lab integration:** the fork chart exposes the default-off existing flag
-with render guards, and fresh current-agent lifecycle runs pass on both kernels.
-Real Kubernetes/image execution and native performance remain blocked.
-See [v29 evidence and exact scope](VALIDATION-v29.md).
+The forwarding and agent lifecycle implementation is present behind the
+startup-only, default-off `vtep.experimentalReturnAffinity.enabled` Helm value.
+The agent preserves the original external peer on the kernel socket and keeps
+return selection after normal Cilium policy/connection-tracking checks.
 
-**v28 local/kernel checkpoint:** optional external Docker peers extend the disposable
-Kubernetes harness; read-only diagnostics identify pressure by map stage and
-observed headroom. Both kernel matrices and focused host tests pass; cluster execution remains pending.
-See [v28 validation](VALIDATION-v28.md) and [Kubernetes instructions](k8s/README.md).
-Upstream main `26d69186dd` was merged as `7f9316a60f`; its two netperf-workflow
-commits do not change the runtime source covered by the v27 validation below.
+**[SUPPORT.md](SUPPORT.md) is the authoritative current capability, compatibility,
+capacity and validation matrix.** It distinguishes implemented behavior from
+historical live evidence and unexecuted deployment gates. The Helm package
+includes a generated copy at `examples/SUPPORT-VTEP.md`.
 
-**Recovered v27:** upstream `main` at `2e94a0a3e3` and the previous v27
-implementation have been reconstructed and published on the separate
-`experimental/vtep-return-affinity-main-v27` branch. Both kernel packet/controller
-matrices and full-agent lifecycle checks pass. Live upgrade/rollback between
-the two rebuilt prototype versions, GC, replacement and drain/disable pass on
-both reviewed kernels. See [fresh recovery evidence and limits](VALIDATION-v27.md).
+Upstream integration snapshot: `7d0c8c64dbdba8e101b35cd502371ea762590183`,
+6 November 2026. The previous fork checkpoint `308356ca6c05` is preserved in
+Git history. [Refreshed-main checks](VALIDATION-main-20261106.md) document this
+integration. Last full-daemon VM evidence is [v29](VALIDATION-v29.md), not a new
+Kubernetes or native performance result. This is a personal-fork lab experiment.
 
-**v26:** both reviewed kernels now prove that the live agent collects newly
-issued cookie records after their real expiry while four established owners
-and TCP flows survive. Production code is unchanged. See
-[fresh periodic-GC evidence and reproduction](VALIDATION-v26.md). The cookie
-agent fixtures now require the `--cookie-core-object` clock-sampler artifact.
+## Install and configure
 
-**v25 validated lifecycle:** the agent now includes the trusted external-VXLAN
-SYN-cookie path behind the existing default-off experiment. The canonical map
-schema is **3** (18 maps), with eight tracing hooks and both pod-side TCX hooks.
-Actual-daemon restart, rollback refusal/recovery, replacement and drain/disable
-pass on both reviewed kernels. See [v25 validation and limits](VALIDATION-v25.md).
-Drain and disable with the previous binary before upgrading an older prototype.
+Use the fork's standard chart under `install/kubernetes/cilium`, with full
+`values.yaml`, schema and templates. The only added enablement value is
+`vtep.experimentalReturnAffinity.enabled`; exact peers use the existing VTEP
+fields. See [the packaged EKS/VTEP example](../../install/kubernetes/cilium/examples/values-eks-vtep-affinity.yaml)
+and [source image/chart build commands](../../install/kubernetes/cilium/examples/INSTALL-VTEP.md).
 
-The milestones below describe their historical checkpoint, not the current
-contract.
-
-**v24 packet-path checkpoint:** real forced-cookie VXLAN handshakes, trusted
-SYN/SYN-ACK/ACK handoff, exact child ownership, replay/collision/pressure and
-real-window expiry tests pass on Linux 6.8 and 6.12. This path is explicitly
-built by the live fixtures; the agent still does not enable it.
-See [v24 evidence and agent-integration gate](VALIDATION-v24.md).
-
-**v23 candidate only:** a bounded SYN-cookie peer-binding ledger passes eleven
-adversarial BPF cases on both kernels with two CPU-pinned worker groups. It is
-not connected to trusted packet/child evidence or loaded by the agent.
-**SYN-cookie forwarding remains unsupported.** See [v23 scope and next gates](VALIDATION-v23.md).
-
-**v22:** actual-daemon SIGKILL/restoration under controlled admission pressure
-passes on Linux 6.8 and 6.12. Both peer flows, exact socket ownership and the
-13-map/six-tracing-hook graph survive; real daemon GC restores new admission.
-See [v22 evidence and deployment limits](VALIDATION-v22.md).
-
-**v21:** overlapping map producers, BPF collection and compatible program reloads
-are tested with established TCP flows through both peers. A separate production-size
-map/controller test checks restart under pressure without evicting occupied records
-or replacing the canonical graph. See [v21 evidence and limits](VALIDATION-v21.md).
-This checkpoint adds tests and documentation only; v20's older-version drain/disable
-requirement still applies.
-
-**v20:** real pinned-map and actual Cilium packet-pressure tests pass on Linux
-6.8 and 6.12 for both listener families. Packet-association insertion failures
-now increment the existing pressure counter as intended. **Drain/disable with
-the previous binary before upgrading:** tracing bytecode changes remain subject
-to strict restore compatibility. See [v20 evidence and limits](VALIDATION-v20.md).
-
-**v19:** an operator-invoked capacity diagnostic opens the existing map bundle
-read-only, reports bounded hash occupancy and aggregate counters, and refuses
-misleading counts on traversal churn or incomplete state. No packet-path hooks,
-map schemas or forwarding behavior changed. See [operations and the hook/map
-review](OPERATIONS.md) for executed checks and outstanding live pressure gates.
-
-**v18:** an isolated SYN-cookie probe verifies kernel-validated child evidence
-before the passive-established callback on Linux 6.8 and 6.12, for both listener
-families. Invalid ACK, namespace isolation and exact tuple reuse tests pass;
-production SYN-cookie forwarding remains disabled. See
-[the handoff and next gate](SYNCOOKIES.md) and [v18 validation](VALIDATION-v18.md).
-
-**v17:** actual-agent lifecycle validation now passes on Linux 6.8 and 6.12.
-Linux 6.8 preserves live TCP/TIME-WAIT and every managed map/link ID across
-v15 -> v16 -> v15. Linux 6.12 safely rejects the unsupported v15 initialization,
-reports failed readiness and recovers with v16 without replacing live state.
-Both runs include pod replacement and drain/disable. This is compatibility
-evidence for those prototype checkpoints, not arbitrary released versions.
-See [v17 validation and remaining gates](VALIDATION-v17.md).
-
-**v16:** strict recovery decoding rejects ambiguous/future JSON and oversized
-inputs without rewriting history. Reviewed BTF signatures select the TIME-WAIT
-publication point on Linux 6.8 and 6.12 without adding hooks or changing maps.
-The lab now includes offload modes, loss/retransmission and real two-boot
-controller recovery. See [v16 validation and remaining gates](VALIDATION-v16.md).
-SYN-cookie forwarding and native performance remain open.
-
-**v15:** the default-off experiment detects loss or replacement of every
-canonical map pin, as well as tracing-hook pin damage. It retires selected
-namespace controls and refuses readiness instead of continuing with an
-unrestorable graph. TIME-WAIT tests now exercise the actual Cilium policy/CT
-consumer, including denial, malformed proofs and one-time duplicate rejection.
-See [TIME-WAIT behavior](TIMEWAIT.md) and [v15 validation](VALIDATION-v15.md).
-Kubernetes remains deferred to the final real-cluster checkpoint.
-
-Original baseline: Cilium `fe561573e0a8adc43bacbcc70bda0c9e01d6676d`.
-Current integration baseline: upstream `26d69186dd96431265a44b68f72ba5db110f364f`.
-Recorded v27 runtime-build baseline: `2e94a0a3e3bddb960f6e403b61afa70da10ba561`.
-Use case: [cilium/cilium#46159](https://github.com/cilium/cilium/issues/46159).
-No public PR or maintainer message has been created. This is not production
-ready or accepted upstream. See [design review](REVIEW.md) and
-[Kubernetes lab instructions](k8s/README.md).
-
-## Supported lab contract
-
-Enable `--enable-experimental-vtep-return-affinity=true` together with the
-existing `--enable-vtep` and exact VTEP endpoint/MAC configuration on a dedicated
-lab node. New synchronous CNI endpoints are selected when IPv4-only, with a
-namespace cookie/path and veth interface. Existing restored endpoints without
-the persisted selection property keep their previous behavior. Recreate pods to
-opt in. Clients cannot set the server-owned property through the endpoint API.
-
-Require IPv4-only VXLAN over IPv4, veth, TCX, BPF host routing and kube-proxy
-replacement. Disable L7 proxies, endpoint routes, IPsec and WireGuard. The
-controller rejects unsupported node settings. Supported listeners include
-AF_INET and IPv4-mapped children of AF_INET6 listeners, with both mapped
-addresses checked against kernel IPv4 fields. IPv6 forwarding is not enabled.
-
-External client ranges must not collide with Kubernetes node, pod or service
-address space. Exact peer configuration is not cryptographic authentication;
-the underlay must enforce trusted traffic origins.
-
-Services/NAT, proxies/ztunnel, native/ordinary-cluster SYN-cookie handshakes,
-SYN payload/TFO, IP options/fragments,
-socketless data/resets remain unsupported. TIME-WAIT supports pure IPv4 ACKs
-under the tested kernel/buffering contract. Unknown
-ownership drops instead of selecting a peer by client prefix. Native traffic
-must use a known Cilium route; arbitrary host-stack fallback stays forbidden.
-Geneve, netkit, IPv6 and peer failover are outside this experiment.
-External VXLAN SYN cookies require the reviewed Linux 6.8.0-31-generic or
-6.12.0-061200-generic build and exactly CONFIG_HZ=1000. The running kernel
-configuration must be available through /proc/config.gz or its matching
-/boot/config file; no estimated timer rate is accepted.
-
-Return affinity is not tenant isolation. Simultaneous identical TCP tuples in
-the same namespace and separate policy identities per external peer are not
-provided. The demonstrations use distinguishable connections, including shared
-client addresses with different client ports. Complete loss of authoritative
-peer ownership still requires affected connections to reconnect.
+Use the exact target-kernel requirements and remaining AL2023 blocker in
+[SUPPORT.md](SUPPORT.md). A chart render cannot establish kernel compatibility.
+Newly created eligible endpoints opt in; existing pods need recreation.
+The value is startup-only and the chart retains `rollOutCiliumPods=false`.
+Physically drain selected pods before disabling, changing peers or rolling back.
+Do not clear pins/history to force startup. A false dedicated value does not
+remove an enabled legacy `extraConfig` key.
 
 ## Structure and packet path
 
-- `bpf/lib/vtep_return_socket.h`: policy-approved SYN tickets, kernel request
-  binding, immutable socket storage, IPv4/mapped-IPv4 callbacks and transient GC.
-- `bpf/lib/vtep_return_cookie*.h`: first-peer cookie ledger, exact packet/child
-  proofs, pre-stack replay/collision guard, socket-local publication and expiry GC.
-- `bpf/lib/vtep_return_core.h` / `bpf_lxc.c`: admission after normal ingress
-  policy and reply selection after ordinary egress policy/connection tracking.
-- `bpf/bpf_vtep_return.c`: node cgroup sockops, selected pod ingress and pre-queue TCX,
-  transient collection, TIME-WAIT producers and independent retirement drop guard.
-- `bpf/lib/vtep_return_timewait*.h`: kernel-incarnation transfer/destruction,
-  exact-skb handoff, one-time proof consumption after normal policy/CT and proof GC.
-- `pkg/datapath/vtep/returnaffinity`: shared agent/loader controller, pinned map
-  bundle, readiness, durable journal, lease and endpoint lifecycle.
-- `contrib/vtep-return-affinity/live`: real-socket, actual endpoint and real-agent
-  fixtures. `k8s/` contains the separate executable Kubernetes checkpoint.
+| Component | Responsibility |
+| --- | --- |
+| `bpf/lib/vtep_return_socket.h` | Policy-approved SYN admission, exact request binding, immutable socket ownership and lifetime-safe cleanup |
+| `bpf/lib/vtep_return_core.h`, `bpf_lxc.c` | Admission after ingress policy and return selection after ordinary egress policy/CT |
+| `bpf/lib/vtep_return_cookie*.h` | Trusted cookie handshake ledger, exact child/packet proofs, replay/collision guard and expiry |
+| `bpf/lib/vtep_return_timewait*.h` | Exact TIME-WAIT incarnation transfer/destruction, queued ACK proof and GC |
+| `bpf/bpf_vtep_return.c` | Sockops, tracing, selected-pod TCX and retirement programs |
+| `pkg/datapath/vtep/returnaffinity` | Agent/loader controller, canonical pins, durable journal, readiness and endpoint lifecycle |
+| `live/`, `k8s/`, `capacity/` | Isolated packet/agent fixtures, disposable-cluster harness and read-only diagnostics |
 
-Trusted ingress records the exact external peer or explicit native origin.
-A never-reused 46-bit nonce in the final internal SYN source MAC carries an
-opaque admission token. `TCP_SAVE_SYN=2` and sockops callbacks validate the saved
-SYN, namespace/generation, tuple, ISN and actual kernel request cookie, then
-publish the owner on the accepted full socket before reclaiming request state.
-The nonce alone grants no forwarding authority.
+Trusted ingress records the external peer or explicit native origin. An opaque,
+never-reused nonce in an internal SYN MAC connects policy-approved admission to
+the saved SYN and exact kernel request. It grants no authority by itself.
+Namespace/generation, tuple, ISN, request and actual socket identity must agree.
+TIME-WAIT and cookie paths use their own exact incarnation/packet evidence;
+application data always requires the actual immutable socket owner.
 
-Cookie handshakes use a separate exact SYN/SYN-ACK/ACK chain: the real kernel
-SYN-ACK producer records both ISNs, the post-policy ACK carries a fresh proof,
-and the checked cookie constructor attaches authority only to its returned child.
-The passive-established callback publishes that child's actual socket cookie.
-A pod-ingress guard rejects stale consumed ACKs and cross-peer borrowing before
-the TCP stack. Cookie records/tombstones remain for the full kernel window;
-their expiry never deletes an established socket owner.
+## Lifecycle and recovery
 
-A pre-queue pod hook stamps exact TIME-WAIT ACK proofs and approved request
-SYN-ACKs so host TC can verify them even when a qdisc orphans the request skb. ARP, active SYNs and application
-data continue to normal processing. Data replies require the actual socket
-owner; the handshake fallback never authorizes application data. FIN, CT loss
-and inactivity are not used as evidence to delete a live owner. Kernel socket
-lifetime reclaims established storage.
+Startup leases the runtime and validates boot, peers, durable history, the entire
+canonical map bundle and pinned hooks. Compatible links are reused without a
+detach gap; missing/incompatible state is not silently replaced. Hooks, peers
+and initial collection are installed before readiness.
 
-The older CT-bit and tuple-guard experiments and their unused controller/tests
-have been removed. `bpf/lib/conntrack.h` is byte-identical to baseline; sampled
-flag-off executable BPF sections remain identical. Earlier experiments remain
-available in the separate v8 patch, not in this implementation.
+Synchronous CNI preparation verifies namespace/veth identity and absence of
+pre-existing listeners/sockets. Durable PREPARING precedes hook installation;
+a second socket census precedes READY/CNI completion. Partial installation needs
+pod replacement. Retirement installs an independent drop guard before endpoint
+links disappear; reclamation requires physical drain, not FIN/timeout guesses.
+Retired cookies are compacted into exact ranges without rejecting gaps belonging
+to unrelated namespaces. [OPERATIONS.md](OPERATIONS.md) describes diagnostics,
+[DOWNGRADE.md](DOWNGRADE.md) the bounded historical compatibility export.
 
-## Agent lifecycle and bounded history
+The abandoned CT-bit/tuple-guard experiments were already removed. The focused
+compiler check requires `conntrack.h` to match the merged upstream snapshot and
+compares sampled feature-off executable sections against that same snapshot.
 
-Startup takes a process lease and validates boot ID, exact peers and the durable
-journal. It restores the complete canonical map bundle/schema and pinned links;
-missing or incompatible members are never silently recreated. Hooks, peers and
-initial GC are initialized before readiness; collection runs every five seconds.
-Normal agent exit closes descriptors and preserves pinned forwarding state.
-Tracing links are reused without a detach gap only when the kernel BTF target,
-attachment type, program tag and exact map IDs agree. Cleanup hooks precede
-producers on fresh install. A missing/replaced map or hook pin, or changed schema marker, permanently revokes readiness
-and retires selected controls. Drain/disable stops producers before cleanup hooks
-and then removes the graph. This is not a live tracing-code upgrade mechanism.
+## Design and evidence
 
-The map schema is now **3**, separate from journal format 2. Before upgrading
-an older live prototype, drain its selected pods and disable with the old binary;
-then upgrade and recreate selected pods. In-place schema migration is refused.
+- [Design invariants and review gates](REVIEW.md)
+- [TIME-WAIT mechanism](TIMEWAIT.md) and [cookie mechanism](SYNCOOKIES.md)
+- [Operational diagnostic and hook/map review](OPERATIONS.md)
+- [Disposable Kubernetes harness and its current execution boundary](k8s/README.md)
+- [Checkpoint index](CHECKPOINTS.md) and individual `VALIDATION-v*.md` reports
 
-Synchronous CNI preparation verifies the actual namespace cookie, host/peer veth
-indices and absence of pre-existing TCP listeners/sockets. PREPARING is durable
-before installing a fresh namespace's nonce counter, cookie-ingress guard and pre-queue hook. After
-normal endpoint programs, routes and pins commit, a second census precedes READY
-and CNI completion. Partial installation requires pod replacement. Warm reload
-preserves socket maps and nonce history, rather than retrofitting listeners.
-
-Deletion records RETIRING and installs an independent host-veth ingress drop
-guard before ordinary endpoint links are removed. It retires control and reclaims
-bounded kernel entries. Once the old veth and namespace binding are physically
-drained, collection removes their auxiliary links and compacts the full
-membership into exact retired-cookie ranges. Gaps remain usable by unrelated
-namespaces; an old selected cookie is never reopened through native routing.
-
-New registrations are bounded by **8,192 combined full memberships and retired ranges**.
-Adjacent cookies compress, so 100,000 contiguous retired cookies need one range.
-Sparse churn may reach the bound: new registrations then fail explicitly while
-existing history remains intact. Clear history through coordinated drain,
-disable and verified reboot; never erase the journal to bypass recovery checks.
-Recovery input and output are independently capped at 64 MiB. Non-regular
-files, duplicate/case-aliased fields, noncanonical namespace keys, unknown
-fields and trailing JSON are refused; original history is preserved.
-This bounds normal journal growth without assuming every earlier cookie belonged
-to the experiment. Old oversized journals are preserved and block new admissions.
-
-Journal version 1 migrates to version 2 on durable publication. Older v1-only
-binaries reject v2. The independent canonical map schema is now 3. Existing listeners
-created before the AF_INET6 extension need pod recreation to obtain the new
-listen callback behavior.
-
-Map capacities are 1,024 namespace controls, 64 exact-peer slots and 4,096
-records in each transient map and the TIME-WAIT owner map. Existing VTEP agent configuration allows eight
-peers. Established ownership is separate kernel socket storage. Non-evicting
-map pressure rejects new admissions or TIME-WAIT handoffs/proofs, depending on
-the exhausted map. Agent outages pause collection and can fill
-pending maps; existing owners are not evicted.
-
-## Disable, recovery and rollback
-
-Drain selected pods through CNI deletion, stop their traffic, remove their old
-veths/namespace bindings, then restart the feature-aware agent with the flag off.
-It verifies physical drain before removing custom pins. Frozen peers can be
-changed after this coordinated disable. Missing state, changed boot or changed
-peers while active fail restoration. Never remove the journal or replace owner
-maps with empty maps to force startup.
-
-Same-boot retired history survives disable and forbids CNI retries that would
-reuse an old selected namespace under ordinary routing. A new namespace cookie
-is eligible. Older-binary rollback has not been validated. Drain/disable is a
-prerequisite,
-and a v1-only binary rejects a v2 journal. The [offline exporter](DOWNGRADE.md)
-preserves cookie history in v1 format after a successful coordinated disable.
-Actual older-daemon rollout remains untested. Do not simply remove the journal.
-Total peer-state loss cannot transparently recover old connections.
-
-## Validation status
-
-The current privileged runner uses disconnected QEMU/TCG, Linux 6.8.0-31,
-cgroup v2/BTF, veth/TCX/VXLAN and explicit trusted test artifacts. It exposes no
-host filesystem or external network. Historical v14/v15 results cover one kernel/topology. The v16 controller/packet
-matrix adds Linux 6.12; it is not full-agent/Kubernetes coverage on that kernel
-or a native performance measurement.
-
-The v14 recovery validation passes in three freshly executed VM runs, each
-ending with `VTEP_VM_EXIT=0`: controller lifecycle/faults, packet regressions,
-and the actual daemon lifecycle. The full daemon test takes 785.79 seconds under
-TCG and includes actual TIME-WAIT ACK forwarding, periodic proof GC, SIGKILL and
-restart preserving all thirteen map and six tracing-link identities, retirement,
-pod replacement, unsafe-disable refusal/recovery, and coordinated drain/disable.
-It verifies complete hook removal and ordinary TCP after disable.
-
-Unit tests, loader template isolation, focused strict BPF compilation, sampled
-flag-off bytecode equivalence, Go vet and `git diff --check` also pass.
-See [v14's exact validation scope](VALIDATION-v14.md) and the subsequent
-[v15 checkpoint](VALIDATION-v15.md), whose latest-main controller/packet and
-actual-daemon VM runs both pass with `VTEP_VM_EXIT=0`.
-
-The actual daemon fixture uses the no-policy identity allocator and policy
-`never`. Separate actual endpoint regressions exercise Cilium policy/CT; this
-is not full-cluster identity/NetworkPolicy validation. Kubernetes remains deferred,
-as do broader kernel, performance and rollout validation. Cookie lifecycle
-coverage is recorded separately in v25; forced native-cookie handling remains
-unsupported.
+Checkpoint reports are historical records. Their former "next step" or
+"unsupported" statements do not override [SUPPORT.md](SUPPORT.md).
 
 ## Reproduce focused checks
 
-Use Go matching `go.mod` and Cilium's Clang. With tools on PATH:
+Use Go matching `go.mod`, Cilium's Clang and Helm. These commands do not replace
+privileged live tests or a real-cluster deployment:
 
 ```sh
-go test ./pkg/datapath/vtep/returnaffinity ./pkg/datapath/loader \
-  ./pkg/datapath/vtep ./pkg/endpoint ./pkg/status
+go test ./pkg/datapath/vtep/returnaffinity ./pkg/datapath/vtep \
+  ./pkg/datapath/linux/config ./pkg/datapath/loader ./pkg/endpoint ./pkg/status
 go test -race ./pkg/datapath/vtep/returnaffinity
 go vet ./pkg/datapath/vtep/returnaffinity \
   ./contrib/vtep-return-affinity/live ./contrib/vtep-return-affinity/k8s/probe
+python3 contrib/vtep-return-affinity/test_helm.py
 python3 -m unittest discover -s contrib/vtep-return-affinity/k8s -p 'test_*.py'
 python3 contrib/vtep-return-affinity/run_spike.py --clang clang --output /tmp/vtep-build
 ```
 
-Build static test binaries for the isolated VM:
-
-```sh
-CGO_ENABLED=0 go test -c -o /tmp/vtep-build/bpftest ./bpf/tests/bpftest
-CGO_ENABLED=0 go test -c -o /tmp/vtep-build/agenttests ./pkg/datapath/vtep/returnaffinity
-CGO_ENABLED=0 go test -c -o /tmp/vtep-build/livetest ./contrib/vtep-return-affinity/live
-```
-
-Run `privileged_vm.py --help` for trusted kernel, BusyBox, QEMU/module paths,
-object inputs and log output. Supply `--runtime-object`, `--agent-tests`,
-`--live-tests`, `--handoff-object`, `--core-object` and optionally
-`--socket-object`. The runner's final `VTEP_VM_EXIT=0` is required for success.
-`--full-agent` additionally needs `--clang`, `--source-bpf` and an appropriate
-iptables runtime through `--netfilter-root`; it executes actual daemon restart
-and regeneration, not just controller reconstruction.
-
-Do not run these root-cgroup/TC tests on a shared node. They require both
-`PRIVILEGED_TESTS=1` and `VTEP_RETURN_ISOLATED_VM=1` inside the disposable guest.
-For actual cluster validation follow [k8s/README.md](k8s/README.md). Missing tools,
-skipped tests and unimplemented TCP paths are recorded as such.
-
-For the complete real-daemon lifecycle sequence, supply `--full-agent`,
-`--clang`, `--source-bpf`, `--netfilter-root`, and
-`--timewait-packet-object`, then select
-`--live-test-run '^TestPrivilegedRealAgentProcess$'`. The packet object supplies
-only a receiver sink in that test; the agent installs every forwarding hook.
-The netfilter directory must contain the required iptables runtime and shared
-libraries. The daemon retains its required `--install-iptables-rules=true`.
-
-Validated milestones are retained as local Git commits. See
-[checkpoint and backup workflow](CHECKPOINTS.md).
-
-## Actual-agent prototype transitions
-
-The VM runner can package a current agent and a distinct previous agent, each
-with its own BPF source tree. Both are executed with the `cilium-agent` basename
-because Cilium uses the executable name to select agent initialization. Before
-each start, the fixture stages that version's BPF tree at the same canonical
-path. This models source replacement without path-dependent compilation tags;
-it never changes the journal or pins to make an incompatible version fit.
-
-Additional artifact arguments:
-
-```sh
---full-agent /tmp/vtep-build/cilium-agent-v16 \
---source-bpf /tmp/vtep-v16/bpf \
---previous-full-agent /tmp/vtep-build/cilium-agent-v15 \
---previous-source-bpf /tmp/vtep-v15/bpf
-```
-
-Use `--previous-agent-mode compatible` for the reviewed v15 -> v16 -> v15
-prototype transition on Linux 6.8. Require both exact subtests:
-
-- `TestPrivilegedRealAgentProcess/upgrade_previous_to_current_preserves_live_connections`
-- `TestPrivilegedRealAgentProcess/rollback_current_to_previous_preserves_live_connections`
-
-Use `--previous-agent-mode missing-hashdance` on Linux 6.12 to test the known
-v15 unsupported-hook refusal, preservation of the live graph and recovery with
-v16. Require
-`TestPrivilegedRealAgentProcess/unsupported_previous_agent_refuses_without_replacing_live_graph`.
-A failure for an unrelated reason does not satisfy that test. The compatible
-mode is not a promise that arbitrary Cilium versions can reuse this experiment.
-The unsupported older agent may keep retrying base-datapath initialization;
-the fixture requires its exact hook error and failed return-affinity readiness,
-then stops it before testing recovery. A running process is not a ready agent.
-
-Both modes must also pass the root lifecycle test, real packet/TIME-WAIT checks,
-unsafe-disable refusal and coordinated drain/disable. Reports fingerprint both
-agent binaries, both supplied production BPF trees and the compiler. Identical
-agent binaries are refused before boot; the two production trees can legitimately
-match when only the agent's Go implementation changed.
-
-For a mixed-kernel run, kernel_matrix.py accepts per-case `previous_agent_mode`
-and `required_tests` fields in addition to `name`, `kernel` and `modules`.
-Supply all shared artifact arguments after `--`, plus
-`--live-test-run '^TestPrivilegedRealAgentProcess$'`. All selected transitions
-must produce explicit PASS evidence; skipped/missing required tests fail.
-
-## SYN-cookie child capability probe
-
-`run_spike.py` also builds `syncookie_child.o`. To run the isolated probe,
-supply `--cookie-object /tmp/vtep-build/syncookie_child.o` and the static live
-test binary to `privileged_vm.py`, select
-`--live-test-run '^TestPrivilegedSYNcookieChildEvidence$'`, and require that
-exact root plus the subtests listed in SYNCOOKIES.md for both listener families.
-The optional object requires `--live-tests`. The probe attaches one temporary
-tracing link and one sockops program inside the disposable guest and creates no
-pins. It never enables SYN-cookie forwarding in the production experiment.
+`privileged_vm.py`, `kernel_matrix.py` and the checkpoint reproduction reports
+specify the trusted kernel/object arguments and explicit isolated-guest safety
+markers. Privileged cases skip outside that environment; never report those
+skips as fresh packet/verifier/lifecycle passes. Real EKS and native measurements
+remain separate gates in [SUPPORT.md](SUPPORT.md).

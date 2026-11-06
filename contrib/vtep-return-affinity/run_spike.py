@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-BASELINE = "2e94a0a3e3bddb960f6e403b61afa70da10ba561"
+BASELINE = "7d0c8c64dbdba8e101b35cd502371ea762590183"
 
 def program_sections(path):
     """Compare executable ELF64 sections, excluding BTF/debug/type names."""

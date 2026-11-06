@@ -1,38 +1,11 @@
 <!-- This file was not reviewed by a human before submission -->
 
-# Operational hardening and hook/map review
+# Operations, diagnostics and hook/map review
 
-**v28 read-only diagnostic:** each map now identifies its stage (admission,
-request binding, cookie/TIME-WAIT handoff or runtime), observed headroom, and
-`full_at_sample`, `available_at_sample` or `unknown`. Failed enumeration and
-socket storage remain unknown. These fields are not insertion-failure counters,
-memory budgets, reserved capacity or health verdicts. Explicit JSON limitations
-retain those distinctions. No BPF code, map layout or hook changes are required.
-
-**v25 validated lifecycle:** schema 3 has 18 maps and eight managed tracing
-hooks, plus sockops, pod ingress/pre-queue TCX and retirement guards. Cookie
-counters and canonical-map diagnostics are included. See
-[v25 executed evidence and limits](VALIDATION-v25.md). Historical validation
-notes below remain tied to their named checkpoint.
-
-**v22 update:** the real daemon now passes restart under controlled live admission
-pressure on both kernels. This closes v21's separate-fixture restart gap for
-that tested map/scenario. It does not establish legitimate sustained load,
-full-agent pressure on every transient map, or Kubernetes policy/identity behavior.
-See [v22 evidence](VALIDATION-v22.md).
-
-**v21 update:** overlapping producer/GC/reload correctness and controller restart
-under pressure now have dedicated tests. The live test uses eight-entry admission
-and request maps, invalid synthetic occupancy, actual Cilium policy/CT and established
-TCP through both peers. The independent controller test uses production-size maps
-and preserves all 13 map IDs and six tracing-link IDs. These do not establish
-sustained legitimate-handshake throughput or full-agent restart under live load.
-See [v21 validation and remaining gates](VALIDATION-v21.md).
-
-**v20 update:** the reader and pressure behavior now have live-kernel evidence
-on Linux 6.8 and 6.12. v20 also fixes missing packet-stage insertion accounting.
-See [v20 validation, scope and required drain/disable upgrade](VALIDATION-v20.md).
-The v19 validation notes below retain their original historical scope.
+Use [SUPPORT.md](SUPPORT.md) as the current support/validation matrix. The
+read-only diagnostic, controlled pressure handling, external-cookie binding and
+agent lifecycle are implemented; historical proposals are not outstanding work.
+This document describes the current diagnostic contract and the graph to review.
 
 ## Read-only capacity diagnostic
 
@@ -75,12 +48,7 @@ without reset. `timewait_rejected` has multiple causes, not just capacity.
 it is not a precise per-map full-drop metric. Admission/request insertion failures
 still lack dedicated production counters. Cookie counters report issued, bound,
 rejected and insertion failures; rejected is not synonymous with capacity full.
-The v19 diagnostic itself introduced no new packet-path counters or schema.
-
-Correction: through v19 the existing counter actually covered proof insertions
-only. v20 adds packet-association insertion failures to that same field, matching
-the combined diagnostic label. This changes a tracing program's tag and requires
-drain/disable before upgrade; no extra counter map or schema is introduced.
+The diagnostic does not itself add packet-path counters or change schemas.
 
 ## Map review
 
@@ -134,44 +102,20 @@ The graph also includes node cgroup sockops, selected-pod ingress/pre-queue TCX 
 retirement guards; "eight tracing links" is not the total attachment count.
 The global skb-release hook and saved-SYN/socket memory deserve native A/B
 measurement. Removing a hook requires an alternative proof for its safety role
-and packet/reuse/lifecycle tests. v25 uses the two reviewed cookie tracing hooks in the agent-managed graph.
+and packet/reuse/lifecycle tests. The two reviewed cookie tracing hooks are part of the agent-managed graph.
 The separate v18 capability probe remains test-only.
 
-## Validation and remaining gates
+## Remaining operational gates
 
-v19 is based on published v18 `fe4c069def1018b967c2ecee77ac39b717236bfa`, tree
-`637a79a5d59a8d2ed88bcb3e34afc1feacf8cd2b`. Checks executed on 3 November 2026:
+Last full-agent VM evidence is recorded in `VALIDATION-v29.md`; controlled
+real-map and packet-pressure evidence is in v20-v28 reports. The refreshed-main
+report records only newly executed checks. Those results do not establish real
+Kubernetes policy/identity behavior, sustained legitimate load on every map,
+released-version rollback or native performance.
 
-- Controller package unit tests and race tests pass; privileged cases are skipped
-  without the required environment. This is not a new live-kernel result.
-- Capacity tests cover empty/partial/full walks, cyclic and over-capacity churn,
-  cancellation, genuine nil initial cursor, error redaction and missing bundles.
-- CLI build, help/usage, missing-bundle JSON and exit-code smoke checks pass.
-- Go vet and git diff --check pass. Production BPF is unchanged.
-
-Historical admission-map saturation, expiry and nonce-exhaustion tests preserve
-established traffic in the existing live fixture. This source review does not
-extend those results to every map or establish sustained-load performance.
-
-Next hardening gates, before broadening SYN-cookie forwarding:
-
-1. Run this reader against a real pinned bundle; verify kernel-enforced read-only
-   updates, stable IDs, full-map observations and pin-loss/refusal behavior.
-2. Independently exhaust the request, TIME-WAIT owner, packet-association and
-   proof maps. Verify no eviction/retargeting, existing-flow survival, exact
-   fail-closed behavior and new admission after legitimate collection.
-3. Repeat pressure with concurrent producers/GC and restart; add precise
-   failure diagnostics where justified by the observed gaps.
-4. Measure native CPU, memory, throughput and tail latency against flag-off.
-   No QEMU/TCG timing may substitute for native performance.
-
-The previous VM tools were removed by workspace maintenance. Native privilege
-and a restored disposable VM environment are not available for a new privileged
-run in this checkpoint. Kubernetes/normal-identity/NetworkPolicy validation
-remains deferred. SYN-cookie peer binding, collision/replay/pressure behavior
-and agent lifecycle integration remain unimplemented. Complete authoritative
-ownership loss still requires reconnecting.
-
-The VM restoration limitation above applied to v19; v20 restores that environment
-and executes the real-map and controlled packet-pressure gates. Sustained
-concurrency/restart under exhaustion and native performance remain open.
+Before production use, exercise the combined target topology, kernel, normal
+identities/policy, node reboot and rolling operations. Measure native CPU/memory,
+throughput/latency, capacity recovery and loss/offload behavior. Preserve map-ID,
+boot and workload context when comparing diagnostics. Do not erase history or
+evict occupied ownership to relieve pressure. The remaining gate list and exact
+configuration limits are maintained only in [SUPPORT.md](SUPPORT.md).
