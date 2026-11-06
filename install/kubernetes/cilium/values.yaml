@@ -2738,6 +2738,7 @@ egressGateway:
 vtep:
   # Fork installation example, including images and peer inputs:
   # examples/values-eks-vtep-affinity.yaml and examples/INSTALL-VTEP.md.
+  # Current support contract: examples/SUPPORT-VTEP.md.
   experimentalReturnAffinity:
     # -- Experimental IPv4/TCP VXLAN connection-specific return affinity for newly
     # created veth pods. Requires the patched agent, compatible kernel tracing,

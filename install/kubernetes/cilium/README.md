@@ -53,6 +53,12 @@ contributors across the globe, there is almost always someone available to help.
 
 ## Experimental VXLAN return-affinity lab
 
+The authoritative [current support matrix](examples/SUPPORT-VTEP.md) is included
+in this package and generated from `contrib/vtep-return-affinity/SUPPORT.md`.
+It separates implemented TIME-WAIT/external-cookie handling from unexecuted EKS,
+AL2023 and native-performance validation. Historical checkpoint gaps are not the
+current support contract.
+
 The complete default values remain in `values.yaml`, including the fields below.
 Use [the EKS/VTEP example values](examples/values-eks-vtep-affinity.yaml) as a
 small override file and follow [the build and install commands](examples/INSTALL-VTEP.md)
