@@ -197,9 +197,12 @@ func (h *HeaderfileWriter) writeNodeConfig(w io.Writer, cfg *config.Config, with
 	cDefinesMap["NODEPORT_NEIGH6_SIZE"] = fmt.Sprintf("%d", option.Config.NeighMapEntriesGlobal)
 	cDefinesMap["NODEPORT_NEIGH4_SIZE"] = fmt.Sprintf("%d", option.Config.NeighMapEntriesGlobal)
 
-	if h.kprCfg.KubeProxyReplacement {
-		cDefinesMap["ENABLE_NODEPORT"] = "1"
+	// todo(ekoops): get rid of this once we are able to ship pre-compiled objects.
+	if !h.kprCfg.KubeProxyReplacement && !option.Config.EnableBPFMasquerade {
+		cDefinesMap["SKIP_NODEPORT_PROGS"] = "1"
+	}
 
+	if h.kprCfg.KubeProxyReplacement {
 		// --- WARNING: THIS CONFIGURATION METHOD IS DEPRECATED, SEE FUNCTION DOC ---
 
 		if cfg.LBConfig.LoadBalancerUsesDSR() {
@@ -228,10 +231,6 @@ func (h *HeaderfileWriter) writeNodeConfig(w io.Writer, cfg *config.Config, with
 
 	cDefinesMap["SNAT_MAPPING_IPV4_SIZE"] = fmt.Sprintf("%d", option.Config.NATMapEntriesGlobal)
 	cDefinesMap["SNAT_MAPPING_IPV6_SIZE"] = fmt.Sprintf("%d", option.Config.NATMapEntriesGlobal)
-
-	if option.Config.EnableBPFMasquerade {
-		cDefinesMap["ENABLE_NODEPORT"] = "1"
-	}
 
 	// --- WARNING: THIS CONFIGURATION METHOD IS DEPRECATED, SEE FUNCTION DOC ---
 

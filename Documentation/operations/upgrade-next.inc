@@ -70,6 +70,12 @@ The following options have been introduced in this version of Cilium:
   ``cidrs`` and may set ``reservedRanges`` to exclude IP ranges from allocation.
   These fields are only available in ``cilium.io/v2``. See
   :ref:`update_existing_ciliumpodippools_with_reservedranges`.
+* The operator option ``--ipam-release-excess-ips`` (Helm value
+  ``ipam.operator.releaseExcessIPs``) enables releasing excess IP addresses for
+  AWS ENI, Azure and Alibaba Cloud IPAM. ``--excess-ip-release-delay`` (Helm
+  value ``ipam.operator.excessIPReleaseDelay``) now also applies to Alibaba
+  Cloud when release is enabled with ``--ipam-release-excess-ips``;
+  ``--alibaba-cloud-release-excess-ips`` keeps releasing without a delay.
 
 Changed Options
 ###############
@@ -84,6 +90,16 @@ differently than in prior releases:
   masqueraded anymore.
 * ``bpf.hostLegacyRouting`` now defaults to true on new Cilium deployments.
 * ``bpf.masquerade`` is enabled by default on new Cilium deployments.
+* The SPIRE Helm values have moved from ``authentication.mutual.spire.*`` to
+  ``encryption.ztunnel.spire.*`` because mutual authentication has been removed
+  and SPIRE is now only used by ztunnel. The previous
+  ``authentication.mutual.spire.enabled`` switch has been removed. To use SPIRE
+  as the ztunnel CA backend, set ``encryption.enabled=true``,
+  ``encryption.type=ztunnel``, and ``encryption.ztunnel.ca.type=spire``. To use
+  an external SPIRE deployment instead of the chart-managed SPIRE resources, set
+  ``encryption.ztunnel.spire.install.enabled=false``. When reusing saved Helm
+  values, clear the old value with ``--set authentication.mutual.spire=null``
+  even if SPIRE was disabled, as the CLI may have saved affinity settings there.
 
 Deprecated Options
 ##################
@@ -106,6 +122,13 @@ you may need to take action to migrate to an alternative.
 
 * The agent option ``--enable-xdp-prefilter`` is deprecated and will be removed
   in a future release.
+
+* ``--aws-release-excess-ips``, ``--alibaba-cloud-release-excess-ips`` and the
+  Helm value ``eni.awsReleaseExcessIPs`` are deprecated in favor of
+  ``--ipam-release-excess-ips`` and ``ipam.operator.releaseExcessIPs``, and will
+  be removed in v1.22. ``eni.awsReleaseExcessIPs`` now renders
+  ``ipam-release-excess-ips``, so upgrade the chart and the operator image
+  together.
 
 Removed Options
 ###############
@@ -145,7 +168,13 @@ Changes to Metrics
 Added Metrics
 #############
 
-* TODO
+* ``cilium_operator_ces_events_skipped_total`` has been added. It counts the
+  ``CiliumEndpointSlice`` watch events that did not trigger a reconciliation
+  because the CES already matched its desired state, for example when the
+  informer echoes the operator's own writes. The ``reason`` label is either
+  ``unchanged`` (an upsert event for a CES that already matches its desired
+  state) or ``unmapped`` (a delete event for a CES with no mapped
+  ``CiliumEndpoint``).
 
 Changed Metrics
 ###############

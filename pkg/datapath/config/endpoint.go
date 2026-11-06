@@ -63,7 +63,9 @@ func Endpoint(ep endpoint.Config, lnc *Config) any {
 	cfg.Debug = ep.GetOptions().IsEnabled(option.Debug)
 	cfg.DebugTagged = ep.GetOptions().IsEnabled(option.DebugTagged)
 	cfg.DebugLB = ep.GetOptions().IsEnabled(option.DebugLB)
+	cfg.EnablePolicyAuditMode = ep.GetOptions().IsEnabled(option.PolicyAuditMode)
 	cfg.EnableDropNotify = ep.GetOptions().IsEnabled(option.DropNotify)
+	cfg.EnablePolicyVerdictNotification = ep.GetOptions().IsEnabled(option.PolicyVerdictNotify)
 
 	cfg.MonitorAggregation = uint8(ep.GetOptions().GetValue(option.MonitorAggregation))
 

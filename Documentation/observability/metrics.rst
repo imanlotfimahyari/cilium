@@ -812,6 +812,10 @@ Name                                     Labels                                 
 ``ipam_capacity``                        ``family``, ``cidr``                         Enabled    Total number of IPs in the IPAM pool labeled by family
 ``ipam_events_total``                    ``action``, ``family``                       Enabled    Number of IPAM events received labeled by action and datapath family type
 ``ip_addresses``                         ``family``                                   Enabled    Number of allocated IP addresses
+``ipam_multipool_available_ips``         ``pool``, ``family``                         Enabled    Total IPs (in-use and free) per pool and family. Emitted by the agent in multi-pool IPAM mode
+``ipam_multipool_used_ips``              ``pool``, ``family``                         Enabled    In-use (allocated) IPs per pool and family. Emitted by the agent in multi-pool IPAM mode
+``ipam_multipool_needed_ips``            ``pool``, ``family``                         Enabled    IPs needed to satisfy allocation demand per pool and family. Emitted by the agent in multi-pool IPAM mode
+``ipam_multipool_allocated_blocks``      ``pool``, ``family``                         Enabled    CIDR blocks (pod CIDRs) allocated to this node per pool and family. Emitted by the agent in multi-pool IPAM mode
 ======================================== ============================================ ========== ========================================================
 
 KVstore
@@ -995,6 +999,7 @@ Name                                     Labels                                 
 ``ipam_available_ips``                   ``target_node``                                                   Enabled    Number of available IPs on a node (taking into account plugin specific NIC/Address limits).
 ``ipam_used_ips``                        ``target_node``                                                   Enabled    Number of currently used IPs on a node.
 ``ipam_needed_ips``                      ``target_node``                                                   Enabled    Number of IPs needed to satisfy allocation on a node.
+``ipam_multipool_total_blocks``          ``pool``, ``family``                                              Enabled    Total number of CIDR blocks per pool and family.
 ======================================== ================================================================= ========== ========================================================
 
 LB-IPAM
@@ -1045,6 +1050,7 @@ Name                                           Labels                           
 ``number_of_cep_changes_per_ces``              ``opcode``                       The number of changed CEPs in each CES update
 ``ces_sync_total``                             ``outcome``, ``failure_type``    The number of completed CES syncs by outcome
 ``ces_queueing_delay_seconds``                 ``queue``                        CiliumEndpointSlice queueing delay in seconds
+``ces_events_skipped_total``                   ``reason``                       The number of CES watch events skipped because the CES already matched its desired state
 ============================================== ================================ ========================================================
 
 Note that the CES controller has multiple internal queues for handling CES updates.

@@ -87,7 +87,6 @@ static __always_inline bool allow_vlan(__u32 vlan_id)
 DEFINE_AUX(struct ct_buffer4, cilium_tail_call_buffer4);
 DEFINE_AUX(struct ct_buffer6, cilium_tail_call_buffer6);
 
-#if defined(ENABLE_IPV4) || defined(ENABLE_IPV6)
 static __always_inline int rewrite_dmac_to_host(struct __ctx_buff *ctx)
 {
 	/* When attached to cilium_host, we rewrite the DMAC to the mac of
@@ -102,7 +101,6 @@ static __always_inline int rewrite_dmac_to_host(struct __ctx_buff *ctx)
 
 	return CTX_ACT_OK;
 }
-#endif
 
 #ifdef ENABLE_IPV6
 static __always_inline __u32
@@ -141,7 +139,7 @@ static __always_inline int
 handle_ipv6(struct __ctx_buff *ctx, __u32 secctx,
 	    __u32 ipcache_srcid,
 	    const bool from_host,
-	    bool *punt_to_stack __maybe_unused,
+	    bool *punt_to_stack,
 	    __s8 *ext_err)
 {
 	struct ct_buffer6 *ct_buffer;
@@ -193,8 +191,7 @@ handle_ipv6(struct __ctx_buff *ctx, __u32 secctx,
 			return DROP_UNENCRYPTED_TRAFFIC;
 	}
 
-#ifdef ENABLE_NODEPORT
-	if (!from_host) {
+	if (NODEPORT_ENABLED && !from_host) {
 		if (!ctx_skip_nodeport(ctx)) {
 			bool is_dsr = false;
 
@@ -211,7 +208,6 @@ handle_ipv6(struct __ctx_buff *ctx, __u32 secctx,
 				return ret;
 		}
 	}
-#endif /* ENABLE_NODEPORT */
 
 	if (!CONFIG(enable_host_firewall))
 		return CTX_ACT_OK;
@@ -557,7 +553,6 @@ handle_to_netdev_ipv6(struct __ctx_buff *ctx, bool is_from_proxy, __u32 src_sec_
 }
 #endif /* ENABLE_IPV6 */
 
-#ifdef ENABLE_IPV4
 static __always_inline __u32
 resolve_srcid_ipv4(const struct __ctx_buff *ctx, const struct iphdr *ip4,
 		   __u32 real_sec_identity, __u32 *ipcache_sec_identity)
@@ -592,7 +587,7 @@ static __always_inline int
 handle_ipv4(struct __ctx_buff *ctx, __u32 secctx,
 	    __u32 ipcache_srcid,
 	    const bool from_host,
-	    bool *punt_to_stack __maybe_unused,
+	    bool *punt_to_stack,
 	    __s8 *ext_err __maybe_unused)
 {
 	struct ct_buffer4 *ct_buffer;
@@ -632,8 +627,7 @@ handle_ipv4(struct __ctx_buff *ctx, __u32 secctx,
 			return DROP_UNENCRYPTED_TRAFFIC;
 	}
 
-#ifdef ENABLE_NODEPORT
-	if (!from_host) {
+	if (NODEPORT_ENABLED && !from_host) {
 		if (!ctx_skip_nodeport(ctx)) {
 			bool is_dsr = false;
 
@@ -652,7 +646,6 @@ handle_ipv4(struct __ctx_buff *ctx, __u32 secctx,
 				return ret;
 		}
 	}
-#endif /* ENABLE_NODEPORT */
 
 	if (!CONFIG(enable_host_firewall))
 		return CTX_ACT_OK;
@@ -1012,26 +1005,25 @@ handle_to_netdev_ipv4(struct __ctx_buff *ctx, bool is_from_proxy, __u32 src_sec_
 	return ipv4_host_policy_egress(ctx, is_from_proxy, src_id, ipcache_srcid, ip4,
 				       trace, ext_err);
 }
-#endif /* ENABLE_IPV4 */
 
 static __always_inline int
 do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
-	  enum trace_point obs_point,  const bool __maybe_unused from_host)
+	  enum trace_point obs_point, const bool from_host)
 {
 	struct trace_ctx trace = {
 		.reason = TRACE_REASON_UNKNOWN,
 		.monitor = TRACE_PAYLOAD_LEN,
 	};
-	fraginfo_t __maybe_unused fraginfo = 0;
-	__u32 __maybe_unused ipcache_srcid = 0;
+	fraginfo_t fraginfo = 0;
+	__u32 ipcache_srcid = 0;
 	enum metric_dir dir = METRIC_INGRESS;
-	void __maybe_unused *data, *data_end;
+	void *data, *data_end;
 	struct ipv6hdr __maybe_unused *ip6;
-	struct iphdr __maybe_unused *ip4;
-	struct arp_eth __maybe_unused *arp;
-	int __maybe_unused hdrlen = 0;
-	__u8 __maybe_unused next_proto = 0;
-	__s8 __maybe_unused ext_err = 0;
+	struct iphdr *ip4;
+	struct arp_eth *arp;
+	int hdrlen = 0;
+	__u8 next_proto = 0;
+	__s8 ext_err = 0;
 	int ret;
 
 	switch (proto) {
@@ -1123,8 +1115,10 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 		return send_drop_notify_error_with_exitcode_ext(ctx, identity, ret, ext_err,
 								CTX_ACT_OK, METRIC_INGRESS);
 #endif
-#ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
+		if (!is_defined(ENABLE_IPV4))
+			goto unknown_l3;
+
 		/* This is the first time revalidate_data() is going to be called.
 		 * Make sure that we don't legitimately drop the packet if the skb
 		 * arrived with the header not being not in the linear data.
@@ -1218,6 +1212,9 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 		return send_drop_notify_error_with_exitcode_ext(ctx, identity, ret, ext_err,
 								CTX_ACT_OK, METRIC_INGRESS);
 	case bpf_htons(ETH_P_ARP):
+		if (!is_defined(ENABLE_IPV4))
+			goto unknown_l3;
+
 		if (!revalidate_data_arp_pull(ctx, &data, &data_end, &arp)) {
 			ret = DROP_INVALID;
 			goto drop_err_ingress;
@@ -1235,8 +1232,8 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 		}
 
 		break;
-#endif /* ENABLE_IPV4 */
 	default:
+unknown_l3:
 		send_trace_notify(ctx, obs_point, identity, UNKNOWN_ID, TRACE_EP_ID_UNKNOWN,
 				  ctx->ingress_ifindex, trace.reason, trace.monitor, proto);
 		if (CONFIG(enable_host_firewall)) {
@@ -1249,9 +1246,9 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 
 	return ret;
 
-drop_err_egress: __maybe_unused
+drop_err_egress:
 	dir = METRIC_EGRESS;
-drop_err_ingress: __maybe_unused
+drop_err_ingress:
 	return send_drop_notify_error(ctx, identity, ret, dir);
 }
 
@@ -1479,17 +1476,25 @@ int cil_to_netdev(struct __ctx_buff *ctx)
 						    src_sec_identity, &trace, &ext_err);
 			break;
 # endif
-# ifdef ENABLE_IPV4
 		case bpf_htons(ETH_P_IP): {
+			if (!is_defined(ENABLE_IPV4)) {
+				ret = DROP_UNKNOWN_L3;
+				break;
+			}
+
 			ret = handle_to_netdev_ipv4(ctx,
 						    magic == MARK_MAGIC_PROXY_EGRESS,
 						    src_sec_identity, &trace, &ext_err);
 			break;
 		}
 		case bpf_htons(ETH_P_ARP):
+			if (!is_defined(ENABLE_IPV4)) {
+				ret = DROP_UNKNOWN_L3;
+				break;
+			}
+
 			ret = CTX_ACT_OK;
 			break;
-# endif
 		default:
 			ret = DROP_UNKNOWN_L3;
 			break;
@@ -1599,25 +1604,26 @@ cil_to_netdev_cont(struct __ctx_buff *ctx, __u32 src_sec_identity,
 		}
 	}
 
-#ifdef ENABLE_NODEPORT
-	if (CONFIG(enable_health_check)) {
-		ret = lb_handle_health(ctx, proto);
-		if (ret != CTX_ACT_OK)
-			goto exit;
-	}
+	if (NODEPORT_ENABLED) {
+		if (CONFIG(enable_health_check)) {
+			ret = lb_handle_health(ctx, proto);
+			if (ret != CTX_ACT_OK)
+				goto exit;
+		}
 
-	if (!ctx_snat_done(ctx) && !ctx_is_overlay(ctx) && !ctx_is_encrypt(ctx)) {
-		/*
-		 * handle_nat_fwd tail calls in the majority of cases,
-		 * so control might never return to this program.
-		 */
-		ret = handle_nat_fwd(ctx, 0, src_sec_identity, proto, false, &trace, &ext_err);
-		if (ret == CTX_ACT_REDIRECT)
-			return ret;
+		if (!ctx_snat_done(ctx) && !ctx_is_overlay(ctx) && !ctx_is_encrypt(ctx)) {
+			/*
+			 * handle_nat_fwd tail calls in the majority of cases,
+			 * so control might never return to this program.
+			 */
+			ret = handle_nat_fwd(ctx, 0, src_sec_identity, proto, false, &trace,
+					     &ext_err);
+			if (ret == CTX_ACT_REDIRECT)
+				return ret;
+		}
 	}
 
 exit:
-#endif
 	if (IS_ERR(ret))
 		goto drop_err;
 
@@ -1674,7 +1680,6 @@ int tail_ipv6_host_policy_ingress(struct __ctx_buff *ctx)
 }
 #endif /* ENABLE_IPV6 */
 
-#ifdef ENABLE_IPV4
 __declare_tail(CILIUM_CALL_IPV4_TO_HOST_POLICY_ONLY)
 static __always_inline
 int tail_ipv4_host_policy_ingress(struct __ctx_buff *ctx)
@@ -1700,12 +1705,11 @@ int tail_ipv4_host_policy_ingress(struct __ctx_buff *ctx)
 
 	return ret;
 }
-#endif /* ENABLE_IPV4 */
 
 static __always_inline
 int host_ingress_policy(struct __ctx_buff *ctx, __be16 proto,
-			__u32 src_sec_identity, bool traced, bool use_tailcall __maybe_unused,
-			__s8 *ext_err __maybe_unused)
+			__u32 src_sec_identity, bool traced, bool use_tailcall,
+			__s8 *ext_err)
 {
 	struct trace_ctx trace = {
 		.reason = TRACE_REASON_UNKNOWN,
@@ -1732,8 +1736,12 @@ int host_ingress_policy(struct __ctx_buff *ctx, __be16 proto,
 
 		break;
 # endif
-# ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
+		if (!is_defined(ENABLE_IPV4)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		if (use_tailcall) {
 			ctx_store_meta(ctx, CB_SRC_LABEL, src_sec_identity);
 			ctx_store_meta(ctx, CB_TRACED, traced);
@@ -1746,9 +1754,13 @@ int host_ingress_policy(struct __ctx_buff *ctx, __be16 proto,
 
 		break;
 	case bpf_htons(ETH_P_ARP):
+		if (!is_defined(ENABLE_IPV4)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		ret = CTX_ACT_OK;
 		break;
-# endif
 	default:
 		ret = DROP_UNKNOWN_L3;
 		break;
@@ -1855,8 +1867,8 @@ int cil_to_host(struct __ctx_buff *ctx)
 			ctx->mark = MARK_MAGIC_SKIP_TPROXY;
 #endif /* !TUNNEL_MODE */
 
-# ifdef ENABLE_NODEPORT
-		if (ctx_is_encrypt(ctx) && validate_ethertype(ctx, &proto)) {
+		if (NODEPORT_ENABLED && ctx_is_encrypt(ctx) &&
+		    validate_ethertype(ctx, &proto)) {
 			/* handle_nat_fwd() tail calls in the majority of cases, so control
 			 * might never return to this program. Since IPsec is not compatible
 			 * iwth Host Firewall, this won't be an issue.
@@ -1866,7 +1878,6 @@ int cil_to_host(struct __ctx_buff *ctx)
 			if (IS_ERR(ret))
 				goto out;
 		}
-#endif /* ENABLE_NODEPORT */
 	}
 
 	if (CONFIG(enable_host_firewall)) {
@@ -1898,16 +1909,15 @@ out:
  * control back to bpf_lxc.
  */
 static __always_inline __maybe_unused int
-from_host_to_lxc(struct __ctx_buff *ctx __maybe_unused, __be16 proto,
-		 __s8 *ext_err __maybe_unused)
+from_host_to_lxc(struct __ctx_buff *ctx, __be16 proto, __s8 *ext_err)
 {
-	struct trace_ctx __maybe_unused trace = {
+	struct trace_ctx trace = {
 		.reason = TRACE_REASON_UNKNOWN,
 		.monitor = 0,
 	};
 	int ret = CTX_ACT_OK;
-	void __maybe_unused *data, *data_end;
-	struct iphdr *ip4 __maybe_unused;
+	void *data, *data_end;
+	struct iphdr *ip4;
 	struct ipv6hdr *ip6 __maybe_unused;
 
 	switch (proto) {
@@ -1919,8 +1929,12 @@ from_host_to_lxc(struct __ctx_buff *ctx __maybe_unused, __be16 proto,
 		ret = ipv6_host_policy_egress(ctx, false, HOST_ID, 0, ip6, &trace, ext_err);
 		break;
 # endif
-# ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
+		if (!is_defined(ENABLE_IPV4)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		if (!revalidate_data(ctx, &data, &data_end, &ip4))
 			return DROP_INVALID;
 
@@ -1933,9 +1947,13 @@ from_host_to_lxc(struct __ctx_buff *ctx __maybe_unused, __be16 proto,
 		ret = ipv4_host_policy_egress(ctx, false, HOST_ID, 0, ip4, &trace, ext_err);
 		break;
 	case bpf_htons(ETH_P_ARP):
+		if (!is_defined(ENABLE_IPV4)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		ret = CTX_ACT_OK;
 		break;
-# endif
 	default:
 		ret = DROP_UNKNOWN_L3;
 		break;

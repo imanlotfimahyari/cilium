@@ -123,7 +123,7 @@ jobs:
     environment:
       name: release-helm
       deployment: false
-    timeout-minutes: 40
+    timeout-minutes: 55
     runs-on: ubuntu-26.04
     steps:
       - name: Install Go
@@ -273,7 +273,8 @@ jobs:
           PR_NUMBER=""
 
           while [ $WAIT_TIME -lt $MAX_WAIT ]; do
-            PR_NUMBER=$(gh pr list --repo cilium/charts --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+            PR_NUMBER=$(gh pr list --repo cilium/charts --head "$BRANCH" --state open --json number,headRepositoryOwner \
+              --jq '[.[] | select(.headRepositoryOwner.login == "cilium")][0].number // empty')
             if [ -n "$PR_NUMBER" ]; then
               echo "Found PR #$PR_NUMBER"
               break
@@ -290,72 +291,93 @@ jobs:
             exit 1
           fi
 
+          # Only the Cilium chart workflow validates the chart that this job releases.
+          wait_for_chart_checks() {
+            local head_sha=$1 run_id="" wait_time=0
+            echo "⏳ Waiting for the Cilium chart checks of $head_sha..."
+            while [ $wait_time -lt $MAX_WAIT ]; do
+              run_id=$(gh api -X GET repos/cilium/charts/actions/workflows/validate-cilium-chart.yaml/runs \
+                -f head_sha="$head_sha" -f event=pull_request -f branch="$BRANCH" \
+                --jq '[.workflow_runs[] | select(.head_repository.full_name == "cilium/charts")][0].id // empty')
+              if [ -n "$run_id" ]; then
+                break
+              fi
+              sleep 10
+              wait_time=$((wait_time + 10))
+            done
+            if [ -z "$run_id" ]; then
+              echo "❌ No Cilium chart checks found for $head_sha after waiting $MAX_WAIT seconds"
+              return 1
+            fi
+            until gh run watch "$run_id" --repo cilium/charts --exit-status --compact --interval 10; do
+              case "$(gh run view "$run_id" --repo cilium/charts --json status,conclusion --jq '.status + "/" + .conclusion')" in
+                completed/success) return 0 ;;
+                completed/*)
+                  echo "❌ Cilium chart checks failed: https://github.com/cilium/charts/actions/runs/$run_id"
+                  return 1 ;;
+              esac
+              sleep 10
+            done
+          }
+
+          repush_chart() {
+            echo "🔄 Re-running release tool to update PR..."
+
+            # Reset the charts directory by removing any files
+            # This is a workaround due to left overs made by the generate_helm_release.sh script
+            echo "🧹 Resetting ../charts directory..."
+            cd ../charts
+            git reset --hard "$(git symbolic-ref refs/remotes/origin/HEAD)"
+            git clean -fdx
+            cd -
+
+            # Re-run the release tool
+            cd ../release
+            ./release start \
+              --force \
+              --release-tool-dir "$(pwd)" \
+              --charts-repo-dir "$(pwd)/../charts" \
+              --repo-dir "$(pwd)/../cilium" \
+              --repo ${{ github.repository }} \
+              --target-version $VERSION \
+              --steps ${{ inputs.step }} \
+              --exclude-labels "cilium-cli-exclusive"
+            cd -
+          }
+
           echo "Merging PR #$PR_NUMBER..."
-          MERGE_ATTEMPTS=0
-          MAX_MERGE_ATTEMPTS=3
+          CHECK_FAILURES=0
+          MERGE_FAILURES=0
+          MAX_FAILURES=3
           MERGE_SUCCESS=false
 
-          while [ $MERGE_ATTEMPTS -lt $MAX_MERGE_ATTEMPTS ]; do
-            MERGE_ATTEMPTS=$((MERGE_ATTEMPTS + 1))
-            echo "🔄 Attempt $MERGE_ATTEMPTS of $MAX_MERGE_ATTEMPTS"
-
-            # Wait for checks to complete
-            echo "⏳ Waiting for PR checks to complete..."
-            sleep 30  # Initial wait to allow checks to start
-            if ! gh pr checks $PR_NUMBER --repo cilium/charts --fail-fast --required --watch; then
-              echo "❌ PR #$PR_NUMBER has failed checks on attempt $MERGE_ATTEMPTS"
-              echo "📋 Failed workflow details:"
-              gh pr checks $PR_NUMBER --repo cilium/charts --json name,state,link | jq -r '.[] | select(.state == "FAILURE") | "  - \(.name): \(.state) (\(.link // "No URL"))"'
-              if [ $MERGE_ATTEMPTS -lt $MAX_MERGE_ATTEMPTS ]; then
-                echo "⚠️ Retrying..."
-                continue
-              else
-                exit 1
-              fi
+          while [ $CHECK_FAILURES -lt $MAX_FAILURES ] && [ $MERGE_FAILURES -lt $MAX_FAILURES ]; do
+            if [ $((CHECK_FAILURES + MERGE_FAILURES)) -gt 0 ]; then
+              repush_chart
             fi
 
-            echo "✅ All required checks passed for PR #$PR_NUMBER"
+            HEAD_SHA=$(git -C ../charts rev-parse HEAD)
+            if ! wait_for_chart_checks "$HEAD_SHA"; then
+              CHECK_FAILURES=$((CHECK_FAILURES + 1))
+              echo "❌ PR #$PR_NUMBER failed the Cilium chart checks ($CHECK_FAILURES of $MAX_FAILURES)"
+              continue
+            fi
+
+            echo "✅ Cilium chart checks passed for PR #$PR_NUMBER"
 
             # Attempt to merge
             echo "Merging PR #$PR_NUMBER..."
-            if gh pr merge $PR_NUMBER --repo cilium/charts --rebase --delete-branch; then
+            if gh pr merge $PR_NUMBER --repo cilium/charts --rebase --delete-branch --match-head-commit "$HEAD_SHA"; then
               echo "✅ Successfully merged PR #$PR_NUMBER"
               MERGE_SUCCESS=true
               break
-            else
-              echo "⚠️ Merge attempt $MERGE_ATTEMPTS failed"
-              if [ $MERGE_ATTEMPTS -lt $MAX_MERGE_ATTEMPTS ]; then
-                echo "🔄 Re-running release tool to update PR..."
-
-                # Reset the charts directory by removing any files
-                # This is a workaround due to left overs made by the generate_helm_release.sh script
-                echo "🧹 Resetting ../charts directory..."
-                cd ../charts
-                git reset --hard "$(git symbolic-ref refs/remotes/origin/HEAD)"
-                git clean -fdx
-                cd -
-
-                # Re-run the release tool (step from line 127)
-                cd ../release
-                ./release start \
-                  --force \
-                  --release-tool-dir "$(pwd)" \
-                  --charts-repo-dir "$(pwd)/../charts" \
-                  --repo-dir "$(pwd)/../cilium" \
-                  --repo ${{ github.repository }} \
-                  --target-version $VERSION \
-                  --steps ${{ inputs.step }} \
-                  --exclude-labels "cilium-cli-exclusive"
-                cd -
-              else
-                echo "❌ Failed to merge PR #$PR_NUMBER after $MAX_MERGE_ATTEMPTS attempts"
-                exit 1
-              fi
             fi
+            MERGE_FAILURES=$((MERGE_FAILURES + 1))
+            echo "⚠️ Merge of PR #$PR_NUMBER failed ($MERGE_FAILURES of $MAX_FAILURES)"
           done
 
           if [ "$MERGE_SUCCESS" = false ]; then
-            echo "❌ Failed to merge PR #$PR_NUMBER after $MAX_MERGE_ATTEMPTS attempts"
+            echo "❌ Failed to merge PR #$PR_NUMBER after $CHECK_FAILURES failed chart runs and $MERGE_FAILURES failed merges"
             exit 1
           fi
 

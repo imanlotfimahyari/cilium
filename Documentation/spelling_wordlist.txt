@@ -741,6 +741,7 @@ recv
 regenerations
 regexes
 reinitialization
+releaseExcessIPs
 relocations
 removeNodeTaints
 reparsing
@@ -904,6 +905,7 @@ unwinded
 upgradeCompatibility
 uplink
 uprobes
+upsert
 upstreamed
 uptime
 uretprobes

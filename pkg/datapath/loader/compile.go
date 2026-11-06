@@ -116,7 +116,8 @@ var (
 		"-Wimplicit-fallthrough"}
 
 	// testIncludes allows the unit tests to inject additional include
-	// paths into the compile command at test time. It is usually nil.
+	// paths and defines into the compile command at test time. It is
+	// usually nil.
 	testIncludes []string
 
 	epProg = &progInfo{
@@ -278,7 +279,7 @@ func compile(ctx context.Context, logger *slog.Logger, prog *progInfo, dir *dire
 			"Compilation had peak RSS",
 			logfields.CompilerPID, compileCmd.Process.Pid,
 			logfields.Output, outputPath,
-			logfields.RssBytes, usage.Maxrss,
+			logfields.RssKiB, usage.Maxrss,
 		)
 	}
 
