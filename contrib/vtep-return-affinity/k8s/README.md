@@ -2,6 +2,9 @@
 
 # Disposable Kubernetes validation
 
+See [the current support matrix](../SUPPORT.md) for implemented features, kernel
+requirements and validation limits. This guide describes the harness workflow.
+
 This harness is implemented but has **not been executed against Kubernetes** in
 this workspace. The local preflight reports `blocked`: kubectl and a container /
 Kubernetes runtime are unavailable, and the host has no network/BPF capabilities.
@@ -29,8 +32,7 @@ native performance or provides tenant isolation for identical TCP tuples.
 
 ## Required lab
 
-Use Linux with cgroup v2, TCX and the required BPF features; Linux 6.8 is the
-currently tested kernel. Use at least two schedulable untainted nodes and an
+Use Linux with cgroup v2, TCX and the required BPF features; The reviewed kernel builds are listed in [SUPPORT.md](../SUPPORT.md). Use at least two schedulable untainted nodes and an
 explicit context named `kind-vtep-affinity-lab` (or a suffix of that name).
 Every node, including control-plane nodes, must carry the label
 `vtep-return-affinity.cilium.io/lab=true`. The harness never reads a default
