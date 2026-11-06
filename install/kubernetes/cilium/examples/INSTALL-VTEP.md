@@ -1,6 +1,9 @@
 <!-- This file was not reviewed by a human before submission -->
 # Build and install the fork's VTEP chart
 
+Use [the current support matrix](SUPPORT-VTEP.md) for the authoritative capability,
+kernel and evidence boundaries. It is generated from the repository's `SUPPORT.md`.
+
 This chart keeps the upstream Cilium values structure. The added switch is
 `vtep.experimentalReturnAffinity.enabled`, default `false`. Peer configuration
 uses the existing `vtep.enabled`, `endpoint`, `mac`, `cidr` and `mask` fields.
@@ -98,6 +101,15 @@ not additional configurable Helm inputs; this chart does not invent new knobs.
 
 ## 4. Render, then install
 
+When upgrading from the pre-refresh chart, rebuild your complete intended override
+file from the new defaults. Upstream moved `authentication.mutual.spire` to
+`encryption.ztunnel.spire`; even the old nonempty disabled settings are rejected.
+The example below uses `--reset-values` so previously stored values cannot retain
+that removed path. Supply all intended custom overrides; do not use `--reuse-values`.
+The affinity experiment still requires encryption/ztunnel disabled. Upstream's
+new `ipam.operator.releaseExcessIPs` and `excessIPReleaseDelay` settings retain
+their upstream defaults; this cluster-pool example does not enable cloud ENI IPAM.
+
 Run against the intended disposable cluster context. AWS VPC CNI and kube-proxy
 must be retired through your existing cluster provisioning/migration process.
 For EKS overlay mode, ensure API-server-reachable endpoints for webhooks and
@@ -119,6 +131,7 @@ helm template cilium ./dist/cilium-1.21.0-dev.tgz \
 
 helm upgrade --install cilium ./dist/cilium-1.21.0-dev.tgz \
   --namespace kube-system --create-namespace \
+  --reset-values \
   -f ./dist/values-eks-vtep-affinity.yaml \
   --set-string image.override="$CILIUM_IMAGE" \
   --set-string operator.image.override="$OPERATOR_IMAGE" \

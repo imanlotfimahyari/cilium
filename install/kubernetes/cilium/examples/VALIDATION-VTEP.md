@@ -1,22 +1,32 @@
 <!-- This file was not reviewed by a human before submission -->
-# Chart packaging checkpoint — 4 November 2026
+# Chart and upstream-main checkpoint — 6 November 2026
 
-Runtime base: `e797812a195bb19647182a385f1100bfdcdb4694` on
-`experimental/vtep-return-affinity-lab-v29`. These changes add installation
-examples and documentation; agent, datapath, map schemas and hooks are unchanged.
+Upstream snapshot: `7d0c8c64dbdba8e101b35cd502371ea762590183` on
+`experimental/vtep-return-affinity-lab-v29`. The download's `SOURCE.txt` identifies
+the exact published fork commit. Chart/appVersion remains `1.21.0-dev`.
 
-- Helm 3.16.3 lint passes for defaults and the EKS example, targeting Kubernetes 1.35.0.
-- Seven Helm regression tests pass, including 19 unsupported-setting subcases,
-  default-manifest comparison with v28, schema/legacy flag checks, explicit
-  agent/operator images and direct API environment, EKS networking settings,
-  enabled/disabled experimental flag rendering and packaged full values/examples.
-- helm-docs 1.11.0 reproduces the committed README without drift.
-- Make dry run resolves both documented release-image targets, including the
-  generic operator variant, requested image names, linux/amd64 and --load.
-- git diff --check passes.
+- Merged 63 upstream commits; reviewed eight overlapping files with no textual conflicts.
+- Helm 3.16.3 lint passes for defaults and the EKS example at Kubernetes 1.35.0.
+- Eight Helm regression tests pass, including 19 unsupported-setting subcases,
+  upstream default manifests, schema/legacy flags, image/API inputs, EKS settings,
+  package contents, SPIRE migration and authoritative support-copy consistency.
+- Full defaults/schema match upstream apart from the default-off affinity field.
+- Values generation and helm-docs 1.11.0 reproduce committed files without drift.
+- Focused Go unit/race/vet checks, daemon compilation, 13 strict BPF object builds,
+  sampled flag-off bytecode comparisons and 17 offline harness/tooling tests pass.
+- `git diff --check` passes.
 
-Docker is unavailable in this workspace. No OCI image was built, pushed or
-executed here. No EKS deployment or AL2023 kernel validation was performed.
-The feature remains off by default; the current AL2023 runtime restriction
-is unchanged. Earlier full-daemon VM evidence is recorded in
-`contrib/vtep-return-affinity/VALIDATION-v29.md` in the repository.
+Upstream moved `authentication.mutual.spire` to `encryption.ztunnel.spire`.
+Rebuild complete intended overrides from the new defaults and use the documented
+`--reset-values` installation command. Do not retain the old nonempty value.
+
+No OCI images were built/run, no refreshed full-agent VM or live-packet tests
+executed, and no real EKS/CNI/native performance validation occurred in this run.
+Last full-daemon live evidence remains `contrib/vtep-return-affinity/VALIDATION-v29.md`.
+Current AL2023 support is unchanged: the experimental feature cannot be enabled
+on that kernel until a reviewed kernel port and validation are completed.
+
+[SUPPORT-VTEP.md](SUPPORT-VTEP.md) is the current support matrix. The repository's
+`contrib/vtep-return-affinity/VALIDATION-main-20261106.md` contains the full review
+and evidence boundary. Drain before incompatible binary upgrades; chart rollback
+alone does not establish pinned-state compatibility.
