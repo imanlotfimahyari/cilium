@@ -149,11 +149,19 @@ example values into `dist/` before running the commands above.
 
 ## Runtime boundary
 
-Current code accepts only reviewed Ubuntu builds `6.8.0-31-generic` and
-`6.12.0-061200-generic`, with verified CONFIG_HZ=1000 and the expected BTF tracing
-targets for SYN-cookie ownership. AL2023 still needs a kernel port and live
-validation. Merely adding an Amazon kernel to the allowlist is not sufficient.
-Keep the experimental flag off on AL2023 until that work is completed.
+The reviewed x86_64 builds are Ubuntu `6.8.0-31-generic` and
+`6.12.0-061200-generic` (1,000 Hz), and AL2023
+`6.12.115-140.210.amzn2023.x86_64` (100 Hz). The loader checks the exact release,
+architecture, kernel configuration and expected BTF tracing targets. The EKS
+example stays off by default. The AL2023 evidence is from an isolated VM.
+Use a disposable EKS deployment where every node running an enabled agent
+matches a reviewed build. The shared ConfigMap affects every agent that uses
+it; creating a separate node group alone does not scope the flag. Recheck
+the kernel before replacing nodes or updating the AMI.
+
+The standard agent mount at `/lib/modules` exposes Amazon's packaged
+`/lib/modules/<running-release>/config`. If that file is present, the extra
+`/boot` mount is unnecessary. A readable config must match the reviewed rate.
 
 If required after validation, the standard optional mount is:
 
@@ -169,7 +177,9 @@ extraHostPathMounts:
 This only makes `/boot/config-<running-release>` readable; it does not make an
 unsupported kernel compatible. ConfigMap-only changes do not activate the
 startup-only flag. Plan an explicit agent rollout; recreate existing pods to
-opt in. Drain selected pods before disabling, changing peers or rolling back.
+opt in. Drain and disable on the previous compatible build before changing
+peers, upgrading to this port from a prior enabled build or rolling back.
+The tracing producer changed; warm upgrade from pre-port pins is not qualified.
 Do not erase pinned maps or history, or use cleanState/cleanBpfState as recovery.
 A Helm rollback does not establish older-binary state compatibility.
 
