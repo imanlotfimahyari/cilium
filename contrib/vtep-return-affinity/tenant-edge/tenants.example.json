@@ -1,0 +1,23 @@
+{
+  "_comment": "This file was not reviewed by a human before submission",
+  "tenants": [
+    {
+      "name": "tenant-a",
+      "ingress_cidr": "198.18.0.0/24",
+      "listen_ip": "198.18.0.1",
+      "listen_port": 8080,
+      "egress_ip": "192.0.2.5",
+      "backend_ip": "192.0.2.6",
+      "backend_port": 18080
+    },
+    {
+      "name": "tenant-b",
+      "ingress_cidr": "198.18.0.0/24",
+      "listen_ip": "198.18.0.1",
+      "listen_port": 8080,
+      "egress_ip": "192.0.2.9",
+      "backend_ip": "192.0.2.10",
+      "backend_port": 18080
+    }
+  ]
+}
