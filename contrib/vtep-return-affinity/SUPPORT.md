@@ -8,8 +8,9 @@ and copy it when packaging. Other design/runbook documents describe mechanisms,
 not a separate support contract. Historical `VALIDATION-v*.md` reports record
 only their named checkpoints.
 
-Integration snapshot: upstream `7d0c8c64dbdba8e101b35cd502371ea762590183`,
-6 November 2026, on `experimental/vtep-return-affinity-lab-v29`. The AL2023 port is a later change on that branch.
+Integration snapshot: upstream `2add8418b4121be58be881b1f8ae533205d78544`,
+20 November 2026, on `experimental/vtep-return-affinity-lab-v29`. The isolated
+AL2023 evidence applies to the earlier kernel-port checkpoint.
 This remains an experimental, default-off personal-fork feature.
 
 ## Implementation and evidence
