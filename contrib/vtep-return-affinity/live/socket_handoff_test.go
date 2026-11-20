@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
+// This file was not reviewed by a human before submission
 
 package live
 
@@ -211,10 +212,11 @@ func newHandoffListenerFixture(t *testing.T, object string, mapped bool) *handof
 	for name, p := range spec.Programs {
 		if name == "handoff_socket" {
 			p.Type, p.AttachType = ebpf.SockOps, ebpf.AttachCGroupSockOps
-		} else if name == "handoff_before_queue" || name == "handoff_from_host" {
-			p.Type, p.AttachType = ebpf.SchedCLS, ebpf.AttachTCXEgress
 		} else {
-			p.Type, p.AttachType = ebpf.SchedCLS, ebpf.AttachTCXIngress
+			// The fixture's callers share tail-call tables across TCX
+			// ingress and egress, as the endpoint programs do. Leave
+			// direction to the link when loading SCHED_CLS programs.
+			p.Type, p.AttachType = ebpf.SchedCLS, ebpf.AttachNone
 		}
 		if strings.HasPrefix(name, "handoff_") {
 			p.SectionName += "/entry"
