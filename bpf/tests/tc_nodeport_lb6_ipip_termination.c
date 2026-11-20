@@ -19,7 +19,6 @@
 
 /* Enable code paths under test */
 #define ENABLE_IPV6 1
-#define DSR_ENCAP_MODE		DSR_ENCAP_IPIP
 
 #define CLIENT_PORT		__bpf_htons(111)
 
@@ -155,13 +154,14 @@ int mock_tail_policy(struct __ctx_buff *ctx)
 #include "lib/ipcache.h"
 #include "lib/lb.h"
 
+ASSIGN_CONFIG(bool, enable_ipv6, true)
 ASSIGN_CONFIG(__u32, interface_ifindex, DEFAULT_IFACE)
 ASSIGN_CONFIG(__u32, encap6_ifindex, 42)
 ASSIGN_CONFIG(bool, enable_bpf_host_routing, true)
 ASSIGN_CONFIG(bool, enable_endpoint_routes, true)
 ASSIGN_CONFIG(bool, enable_netkit, false)
 ASSIGN_CONFIG(bool, enable_ipip_termination, true)
-ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true })
+ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true, .dispatch_mode = DSR_DISPATCH_IPIP })
 ASSIGN_CONFIG(bool, enable_nodeport_acceleration, true) /* exercise the XFER_PKT_NO_SVC handoff */
 ASSIGN_CONFIG(bool, enable_nodeport, true)
 

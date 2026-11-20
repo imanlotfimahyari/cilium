@@ -12,8 +12,8 @@ CLI for interacting with the local Cilium Agent
 
 ```
       --config string        Config file (default is $HOME/.cilium.yaml)
-  -D, --debug                Enable debug messages
-  -h, --help                 help for cilium-dbg
+  -D, --debug[=true|false]   Enable debug messages
+  -h, --help[=true|false]    help for cilium-dbg
   -H, --host string          URI to server-side API
       --log-driver strings   Logging endpoints to use (example: syslog)
       --log-opt map          Log driver options (example: format=json)
@@ -33,6 +33,7 @@ CLI for interacting with the local Cilium Agent
 * [cilium-dbg envoy](cilium-dbg_envoy.md)	 - Manage Envoy Proxy
 * [cilium-dbg fqdn](cilium-dbg_fqdn.md)	 - Manage fqdn proxy
 * [cilium-dbg identity](cilium-dbg_identity.md)	 - Manage security identities
+* [cilium-dbg install-cni-binaries](cilium-dbg_install-cni-binaries.md)	 - Install the CNI plugin binaries into the CNI bin directory on the host
 * [cilium-dbg ip](cilium-dbg_ip.md)	 - Manage IP addresses and associated information
 * [cilium-dbg kvstore](cilium-dbg_kvstore.md)	 - Direct access to the kvstore
 * [cilium-dbg loadinfo](cilium-dbg_loadinfo.md)	 - Show load information

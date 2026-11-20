@@ -6,9 +6,27 @@
 #include "common.h"
 #include "pktgen.h"
 
+/* Each variant defines, before including this file:
+ * - PER_ENDPOINT_ROUTES: 1 for the per-endpoint routes configuration, which
+ *   turns enable_bpf_routing off, or 0 for BPF routing.
+ * - FROM_CIL_TO_CONTAINER: 1 to simulate the egress policy program being tail
+ *   called from cil_to_container, the fallback for when the
+ *   MARK_MAGIC_PROXY_EGRESS_EPID ip rule is not in place yet, or 0 for the
+ *   tail call from cil_from_host.
+ *
+ *   TODO: Remove in v1.22, together with the cil_to_container fallback. Then
+ *   drop FROM_CIL_TO_CONTAINER and the variants that set it to 1.
+ */
+#if !defined(PER_ENDPOINT_ROUTES) || !defined(FROM_CIL_TO_CONTAINER)
+# error "Define PER_ENDPOINT_ROUTES and FROM_CIL_TO_CONTAINER before including this file"
+#endif
+#if FROM_CIL_TO_CONTAINER && !PER_ENDPOINT_ROUTES
+# error "cil_to_container only handles L7 LB traffic with per-endpoint routes"
+#endif
+
 /* Enable code paths under test */
 #define ENABLE_IPV4 1
-#define ENABLE_IPV6
+#define ENABLE_IPV6 1
 
 /* Needed variables for the setup */
 #define CLIENT_IP		v4_pod_one
@@ -21,16 +39,30 @@
 
 #define CLIENT_EP_ID		127
 
-/* Mockup redirect, so that we track the ifindex used in ctx_redirect calls if needed. */
+/* The local backend, only populated in the endpoint map by the local delivery
+ * tests. A separate client port keeps them from sharing a CT entry with the
+ * tests above.
+ */
+#define BACKEND_EP_ID		128
+#define BACKEND_IFINDEX		25
+#define LOCAL_CLIENT_PORT	tcp_src_two
+
+/* Mockup redirect, so that we track the ifindex and the flags used in
+ * ctx_redirect calls. The flags are what tells redirect_self() (flags 0) apart
+ * from the redirect into cilium_host's ingress hook (BPF_F_INGRESS): both land
+ * on ifindex 1 under BPF_PROG_TEST_RUN.
+ */
 static volatile __u32 redirect_ifindex;
+static volatile __u32 redirect_flags;
 
 #define ctx_redirect mock_ctx_redirect
 
 static __always_inline __maybe_unused int
 mock_ctx_redirect(const struct __sk_buff *ctx __maybe_unused,
-		  int ifindex, __u32 flags __maybe_unused)
+		  int ifindex, __u32 flags)
 {
 	redirect_ifindex = (__u32)ifindex;
+	redirect_flags = flags;
 	return CTX_ACT_REDIRECT;
 }
 
@@ -60,19 +92,54 @@ mock_tail_call_dynamic(struct __ctx_buff *ctx __maybe_unused,
 }
 
 # include "lib/bpf_lxc.h"
+#include "lib/endpoint.h"
 #include "lib/policy.h"
+
+/* BPF_PROG_TEST_RUN are executed with `ctx->ifindex = 1` (loopback device) as in
+ * the kernel `bpf_prog_test_run_skb()` function.
+ * (see https://github.com/torvalds/linux/blob/0257f64bdac7fdca30fa3cae0df8b9ecbec7733a/net/bpf/test_run.c#L991)
+ * L7 LB traffic is normally tail called from cil_from_host, so the ctx sits
+ * on cilium_host: set cilium_host_ifindex to the ifindex the test run gives
+ * us, given we cannot change ctx->ifindex. To simulate the tail call from
+ * cil_to_container instead, where the ctx sits on the backend's lxc device,
+ * give cilium_host any other ifindex.
+ */
+#if FROM_CIL_TO_CONTAINER
+ASSIGN_CONFIG(__u32, cilium_host_ifindex, 2)
+#else
+ASSIGN_CONFIG(__u32, cilium_host_ifindex, 1)
+#endif
 
 ASSIGN_CONFIG(__u32, cilium_net_ifindex, 10)
 ASSIGN_CONFIG(__u32, interface_ifindex, 12)
 
+/* The packets are generated with mac_host as dst MAC. Give cilium_host a
+ * different one, so that the tests can tell whether the dst MAC was rewritten
+ * before hairpinning into cilium_host.
+ */
+#define CILIUM_HOST_MAC		mac_three
+ASSIGN_CONFIG(union macaddr, cilium_host_mac, { .addr = mac_three_addr })
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_ipv6, true)
 ASSIGN_CONFIG(bool, enable_l7_lb, true)
 ASSIGN_CONFIG(bool, enable_nodeport, true)
+
+/* Per-endpoint routes delegate routing to the stack, which turns BPF routing
+ * off for the endpoint.
+ */
+ASSIGN_CONFIG(bool, enable_endpoint_routes, PER_ENDPOINT_ROUTES)
+ASSIGN_CONFIG(bool, enable_bpf_routing, !PER_ENDPOINT_ROUTES)
 
 /* Test that a packet received from a L7LB for a local backend gets correctly handled:
  * - in case of per-endpoint routes disabled, packet tail calls from
      cil_from_host, and it will return to stack
  * - in case of per-endpoint routes, packet tail calls from
-     cil_to_container, and it will be hairpinned back to handle ingress policies.
+     cil_from_host, and is redirected into cilium_host's ingress hook so that
+     the stack routes it.
+ * - in case of per-endpoint routes without the ip rule in place, packet tail
+     calls from cil_to_container, and is hairpinned back out of the lxc device
+     so that cil_to_container enforces ingress policy.
  * Given we cannot import both bpf_host and bpf_lxc, in our SETUP functions
  * we will simulate hitting the `tail_call_egress_policy(ctx, lxc_id)` codepath.
  */
@@ -110,6 +177,7 @@ int l7_lb_local_backend_v4_check(const struct __ctx_buff *ctx)
 {
 	void *data, *data_end;
 	__u32 *status_code;
+	struct ethhdr *l2;
 
 	test_init();
 
@@ -121,11 +189,39 @@ int l7_lb_local_backend_v4_check(const struct __ctx_buff *ctx)
 
 	status_code = data;
 
+	l2 = data + sizeof(__u32);
+	if ((void *)l2 + sizeof(struct ethhdr) > data_end)
+		test_fatal("l2 out of bounds");
+
 	if (CONFIG(enable_bpf_routing)) {
 		assert(*status_code == CTX_ACT_OK);
+	} else if (FROM_CIL_TO_CONTAINER) {
+		assert(*status_code == CTX_ACT_REDIRECT);
+
+		/* Looped back out of the lxc device the ctx sits on, so that
+		 * cil_to_container sees it again with the mark cleared and
+		 * enforces ingress policy.
+		 */
+		assert(redirect_ifindex == ctx_get_ifindex(ctx));
+		assert(redirect_flags == 0);
+
+		/* With the dst MAC left alone: it is not headed for cilium_host. */
+		if (memcmp(l2->h_dest, (__u8 *)mac_host, ETH_ALEN) != 0)
+			test_fatal("dst MAC has changed");
 	} else {
 		assert(*status_code == CTX_ACT_REDIRECT);
-		assert(redirect_ifindex == ctx_get_ifindex(ctx));
+
+		/* Redirected into cilium_host's ingress hook, not looped back
+		 * out of the device the ctx sits on.
+		 */
+		assert(redirect_ifindex == CONFIG(cilium_host_ifindex));
+		assert(redirect_flags == BPF_F_INGRESS);
+
+		/* With cilium_host's MAC as dst, so that it is received as
+		 * PACKET_HOST rather than dropped as PACKET_OTHERHOST.
+		 */
+		if (memcmp(l2->h_dest, (__u8 *)CILIUM_HOST_MAC, ETH_ALEN) != 0)
+			test_fatal("dst MAC not rewritten to cilium_host's");
 	}
 
 	test_finish();
@@ -166,6 +262,7 @@ int l7_lb_local_backend_v6_check(const struct __ctx_buff *ctx)
 {
 	void *data, *data_end;
 	__u32 *status_code;
+	struct ethhdr *l2;
 
 	test_init();
 
@@ -177,12 +274,159 @@ int l7_lb_local_backend_v6_check(const struct __ctx_buff *ctx)
 
 	status_code = data;
 
+	l2 = data + sizeof(__u32);
+	if ((void *)l2 + sizeof(struct ethhdr) > data_end)
+		test_fatal("l2 out of bounds");
+
 	if (CONFIG(enable_bpf_routing)) {
 		assert(*status_code == CTX_ACT_OK);
+	} else if (FROM_CIL_TO_CONTAINER) {
+		assert(*status_code == CTX_ACT_REDIRECT);
+
+		assert(redirect_ifindex == ctx_get_ifindex(ctx));
+		assert(redirect_flags == 0);
+
+		if (memcmp(l2->h_dest, (__u8 *)mac_host, ETH_ALEN) != 0)
+			test_fatal("dst MAC has changed");
 	} else {
 		assert(*status_code == CTX_ACT_REDIRECT);
-		assert(redirect_ifindex == ctx_get_ifindex(ctx));
+
+		assert(redirect_ifindex == CONFIG(cilium_host_ifindex));
+		assert(redirect_flags == BPF_F_INGRESS);
+
+		if (memcmp(l2->h_dest, (__u8 *)CILIUM_HOST_MAC, ETH_ALEN) != 0)
+			test_fatal("dst MAC not rewritten to cilium_host's");
 	}
 
 	test_finish();
 }
+
+#if PER_ENDPOINT_ROUTES
+/* With per-endpoint routes and without BPF host routing, the endpoint lookup
+ * in ipv{4,6}_forward_to_destination() is only done for L7 LB traffic
+ * (from_l7lb): other pod traffic is left to the stack's per-endpoint route.
+ * Check that L7 LB traffic to a backend in the endpoint map is redirected to
+ * the backend's lxc device. tc_redirect_lxc covers the same delivery, but only
+ * with BPF host routing enabled.
+ */
+PKTGEN(PROG_TYPE, "l7_lb_local_backend_delivery_v4")
+int l7_lb_local_backend_delivery_v4_pktgen(struct __ctx_buff *ctx)
+{
+	struct pktgen builder;
+	struct tcphdr *l4;
+
+	pktgen__init(&builder, ctx);
+
+	l4 = pktgen__push_ipv4_tcp_packet(&builder,
+					  (__u8 *)mac_one, (__u8 *)mac_host,
+					  CLIENT_IP, BACKEND_IP,
+					  LOCAL_CLIENT_PORT, BACKEND_PORT);
+	if (!l4)
+		return TEST_ERROR;
+
+	pktgen__finish(&builder);
+	return 0;
+}
+
+SETUP(PROG_TYPE, "l7_lb_local_backend_delivery_v4")
+int l7_lb_local_backend_delivery_v4_setup(struct __ctx_buff *ctx)
+{
+	/* We need this to allow the packet proceeding. */
+	policy_add_egress_allow_all_entry();
+
+	/* The backend is a local endpoint on this node. */
+	endpoint_v4_add_entry(BACKEND_IP, BACKEND_IFINDEX, BACKEND_EP_ID, 0, 0, 0,
+			      (const __u8 *)mac_two, (const __u8 *)mac_three);
+
+	/* Simulate hitting the codepath. */
+	return tail_call_egress_policy(ctx, CLIENT_EP_ID);
+}
+
+CHECK(PROG_TYPE, "l7_lb_local_backend_delivery_v4")
+int l7_lb_local_backend_delivery_v4_check(const struct __ctx_buff *ctx)
+{
+	void *data, *data_end;
+	__u32 *status_code;
+
+	test_init();
+
+	endpoint_v4_del_entry(BACKEND_IP);
+
+	data = (void *)(long)ctx_data(ctx);
+	data_end = (void *)(long)ctx->data_end;
+
+	if (data + sizeof(__u32) > data_end)
+		test_fatal("status code out of bounds");
+
+	status_code = data;
+
+	assert(*status_code == CTX_ACT_REDIRECT);
+
+	/* Delivered to the backend's lxc device, not to cilium_host. */
+	assert(redirect_ifindex == BACKEND_IFINDEX);
+	assert(redirect_flags == 0);
+
+	test_finish();
+}
+
+/* See IPv4 test for comments. */
+PKTGEN(PROG_TYPE, "l7_lb_local_backend_delivery_v6")
+int l7_lb_local_backend_delivery_v6_pktgen(struct __ctx_buff *ctx)
+{
+	struct pktgen builder;
+	struct tcphdr *l4;
+
+	pktgen__init(&builder, ctx);
+
+	l4 = pktgen__push_ipv6_tcp_packet(&builder,
+					  (__u8 *)mac_one, (__u8 *)mac_host,
+					  (__u8 *)CLIENT_IP6, (__u8 *)BACKEND_IP6,
+					  LOCAL_CLIENT_PORT, BACKEND_PORT);
+	if (!l4)
+		return TEST_ERROR;
+
+	pktgen__finish(&builder);
+	return 0;
+}
+
+SETUP(PROG_TYPE, "l7_lb_local_backend_delivery_v6")
+int l7_lb_local_backend_delivery_v6_setup(struct __ctx_buff *ctx)
+{
+	/* We need this to allow the packet proceeding. */
+	policy_add_egress_allow_all_entry();
+
+	/* The backend is a local endpoint on this node. */
+	endpoint_v6_add_entry((const union v6addr *)BACKEND_IP6, BACKEND_IFINDEX,
+			      BACKEND_EP_ID, 0, 0,
+			      (const __u8 *)mac_two, (const __u8 *)mac_three);
+
+	/* Simulate hitting the codepath. */
+	return tail_call_egress_policy(ctx, CLIENT_EP_ID);
+}
+
+CHECK(PROG_TYPE, "l7_lb_local_backend_delivery_v6")
+int l7_lb_local_backend_delivery_v6_check(const struct __ctx_buff *ctx)
+{
+	void *data, *data_end;
+	__u32 *status_code;
+
+	test_init();
+
+	endpoint_v6_del_entry((const union v6addr *)BACKEND_IP6);
+
+	data = (void *)(long)ctx_data(ctx);
+	data_end = (void *)(long)ctx->data_end;
+
+	if (data + sizeof(__u32) > data_end)
+		test_fatal("status code out of bounds");
+
+	status_code = data;
+
+	assert(*status_code == CTX_ACT_REDIRECT);
+
+	assert(redirect_ifindex == BACKEND_IFINDEX);
+	assert(redirect_flags == 0);
+
+	test_finish();
+}
+#endif /* PER_ENDPOINT_ROUTES */

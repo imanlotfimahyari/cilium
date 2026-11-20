@@ -132,6 +132,9 @@ jobs:
           hubble: false
           test-concurrency: 5
 
+      - name: Cleanup Disk space in runner
+        uses: ./.github/actions/disk-cleanup
+
       - name: Set up job variables
         id: vars
         run: |
@@ -149,7 +152,8 @@ jobs:
           echo owner=${OWNER} >> $GITHUB_OUTPUT
 
           # Cilium configured with delegated IPAM mode.
-          # * Set cni.customConf=true since conflist is configured using host mount into kind nodes.
+          # * Set cni.customConf=true since conflist is installed into kind nodes by the workflow
+          #   after Cilium becomes ready.
           # * Delegated IPAM requires direct routing mode.
           # * Delegated IPAM is incompatible with all options that require cilium-agent to assign itself an IP address,
           #    so set local-router-ipv4 and endpointHealthChecking.enabled=false.
@@ -240,19 +244,9 @@ jobs:
                   controllerManager:
                     extraArgs:
                       allocate-node-cidrs: "false"
-              extraMounts:
-                - hostPath: kind-control-plane-delegated-ipam.conflist
-                  containerPath: /etc/cni/net.d/05-cilium.conflist
 
             - role: worker
-              extraMounts:
-                - hostPath: kind-worker-delegated-ipam.conflist
-                  containerPath: /etc/cni/net.d/05-cilium.conflist
-
             - role: worker
-              extraMounts:
-                - hostPath: kind-worker2-delegated-ipam.conflist
-                  containerPath: /etc/cni/net.d/05-cilium.conflist
 
           networking:
             disableDefaultCNI: true
@@ -279,7 +273,7 @@ jobs:
             install/kubernetes/cilium
 
       - name: Create kind cluster
-        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           version: ${{ env.KIND_VERSION }}
           node_image: ${{ env.KIND_K8S_IMAGE }}
@@ -289,7 +283,7 @@ jobs:
           wait: 0
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@d9302835ae0d3cb6148178d4590240622289e193 # v0.20.1
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -315,11 +309,6 @@ jobs:
           login-username: ${{ vars.DOCKER_READ_USERNAME }}
           login-password: ${{ secrets.DOCKER_READ_PASSWORD }}
           auth-required: ${{ vars.DOCKER_AUTH_REQUIRED }}
-
-      - name: Wait for nodes to become ready
-        run: |
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s
-          kubectl get nodes -oyaml
 
       # Delegated IPAM requires direct routing, and we can't use autoDirectNodeRoutes or BGP because
       # Cilium isn't aware of the pod CIDR for each node.
@@ -365,6 +354,17 @@ jobs:
         run: |
           cilium status --wait --interactive=false --wait-duration=10m
           kubectl -n kube-system get pods -owide
+
+      - name: Install conflist on each node
+        run: |
+          for node in kind-control-plane kind-worker kind-worker2; do
+            docker cp "${node}-delegated-ipam.conflist" "${node}:/etc/cni/net.d/05-cilium.conflist"
+          done
+
+      - name: Wait for nodes to become ready
+        run: |
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          kubectl get nodes -oyaml
 
       - name: Make JUnit report directory
         run: |

@@ -29,6 +29,12 @@ authenticated using mutual TLS before being sent to the destination.
 Generating secrets for authentication
 =====================================
 
+.. warning::
+
+   By default (``encryption.ztunnel.ca.type=internal``), Cilium uses a
+   built-in CA to issue workload certificates. The built-in CA is intended
+   for testing and evaluation only. Do not use it in production.
+
 Cilium's ztunnel integration requires a set of private keys and accompanying
 to certificates be present via Kubernetes secrets. This follows the same pattern
 as IPsec key injections.
@@ -170,12 +176,47 @@ Validate the Setup
        13:00:06.982675 IP 10.244.2.3.33446 > 10.244.1.95.15008: ...
 
 
+Which traffic is encrypted
+==========================
+
+The following table denotes which traffic is encrypted with ztunnel depending
+on whether the communicating endpoints are enrolled and where they are located.
+Traffic is only encrypted when both the source and the destination are enrolled
+in ztunnel.
+
+Unlike :ref:`encryption_wg` and :ref:`encryption_ipsec`, which only encrypt
+traffic leaving a node, ztunnel also encrypts traffic between enrolled pods on
+the same node.
+
++------------------+-------------------------+-----------+
+| Origin           | Destination             | Encrypted |
++==================+=========================+===========+
+| Enrolled Pod     | local or remote         | Yes       |
+|                  | Enrolled Pod            |           |
++------------------+-------------------------+-----------+
+| Enrolled Pod     | local or remote         | No        |
+|                  | Non-enrolled Pod        |           |
++------------------+-------------------------+-----------+
+| Non-enrolled Pod | local or remote         | No        |
+|                  | Enrolled Pod            |           |
++------------------+-------------------------+-----------+
+| Enrolled Pod     | local or remote Node    | No        |
++------------------+-------------------------+-----------+
+| Node             | local or remote         | No        |
+|                  | Enrolled Pod            |           |
++------------------+-------------------------+-----------+
+
+* **Enrolled Pod**: Cilium-managed K8s Pod running in a namespace enrolled in
+  ztunnel.
+* **Non-enrolled Pod**: Cilium-managed K8s Pod running in a namespace that is
+  not enrolled in ztunnel.
+* **Node**: K8s host running Cilium, or Pod running in the host network
+  namespace. Nodes cannot be enrolled in ztunnel.
+* **local** / **remote**: The destination runs on the same node as the origin
+  or on a different node, respectively.
+
 Limitations
 ===========
-
-* Traffic between workloads is only supported when both the source and
-  destination endpoints are enrolled in ztunnel. Communication between an
-  enrolled workload and a non-enrolled workload is not supported.
 
 * The ztunnel integration currently only supports enrollment via namespace
   labels. Pod-level enrollment is not supported.
@@ -193,6 +234,12 @@ Limitations
 
 Known Issues
 ============
+
+* The built-in CA (``encryption.ztunnel.ca.type=internal``) is for testing
+  only and is not suitable for production. See
+  `Generating secrets for authentication`_. Integration with SPIRE
+  (``encryption.ztunnel.ca.type=spire``) is in progress and will be the
+  recommended CA for production use.
 
 * Cluster Mesh is not currently supported when ztunnel is enabled. Attempting
   to enable both will result in a validation error.

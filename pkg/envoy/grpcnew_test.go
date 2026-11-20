@@ -5,6 +5,7 @@ package envoy
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	tls "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	cache_types "github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/server/sotw/v3"
 	envoy_server "github.com/envoyproxy/go-control-plane/pkg/server/v3"
 	"github.com/stretchr/testify/require"
@@ -25,8 +27,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/cilium/cilium/pkg/completion"
+	"github.com/cilium/cilium/pkg/container/set"
 	"github.com/cilium/cilium/pkg/envoy/config"
 	"github.com/cilium/cilium/pkg/envoy/xds"
 	"github.com/cilium/cilium/pkg/envoy/xdsnew"
@@ -50,6 +54,99 @@ func newTestADSClient(t *testing.T, server *adsServer) discovery.AggregatedDisco
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	return discovery.NewAggregatedDiscoveryServiceClient(conn)
+}
+
+// Cache relays buffer SetSnapshot's synchronous responses until the cache locks
+// can be released. The buffer assumes one watch per TypeURL per stream, however
+// many resource names are subscribed. One response per name could fill the relay
+// and block SetSnapshot before collection, even with a receiving gRPC client.
+// Exercise the real go-control-plane ADS loop so an upstream change to watch
+// replacement or response-channel ownership fails here. Investigate that contract
+// before increasing buffer sizes; a larger fixed buffer would only move the limit.
+func TestADSNamedSubscriptionsShareWatch(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "sotw"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := hivetest.Logger(t)
+			cache := xdsnew.NewCache(logger, xdsnew.WithNodeIDs(localNodeID))
+			server := newTestADSServerWithCache(t, cache, logger, nil, nil, xdsServerConfig{}, nil, nil)
+			client := newTestADSClient(t, server)
+			// Bound blocked RPCs and publication on regression; successful runs
+			// finish as soon as their responses arrive.
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+
+			// Exceed both the upstream stream buffers and Cilium's relay minimum.
+			const resourceCount = 4 * max(int(cache_types.UnknownType), int(typeurl.Count))
+			initial := xds.Resources{Endpoints: make(map[string]*endpoint.ClusterLoadAssignment, resourceCount)}
+			updated := xds.Resources{Endpoints: make(map[string]*endpoint.ClusterLoadAssignment, resourceCount)}
+			for i := range resourceCount {
+				name := fmt.Sprintf("endpoint-%d", i)
+				initial.Endpoints[name] = &endpoint.ClusterLoadAssignment{ClusterName: name}
+				updated.Endpoints[name] = &endpoint.ClusterLoadAssignment{
+					ClusterName: name, Endpoints: []*endpoint.LocalityLbEndpoints{{Priority: 1}},
+				}
+			}
+			require.NoError(t, cache.ApplyResources(ctx, localNodeID, xdsnew.ResourceMutations{Upserted: initial}, nil, typeurl.Set{}))
+
+			var nonce, version string
+			var send func([]string) error
+			var receive func() []*anypb.Any
+			var watchCount func() int
+
+			stream, err := client.StreamAggregatedResources(ctx)
+			require.NoError(t, err)
+			send = func(names []string) error {
+				return stream.Send(&discovery.DiscoveryRequest{
+					Node: &core.Node{Id: localNodeID}, TypeUrl: EndpointTypeURL,
+					ResourceNames: names, VersionInfo: version, ResponseNonce: nonce,
+				})
+			}
+			receive = func() []*anypb.Any {
+				t.Helper()
+				response, err := stream.Recv()
+				require.NoError(t, err)
+				require.Equal(t, EndpointTypeURL, response.GetTypeUrl())
+				nonce, version = response.GetNonce(), response.GetVersionInfo()
+				return response.GetResources()
+			}
+			watchCount = func() int { return cache.GetSnapshotCache().GetStatusInfo(localNodeID).GetNumWatches() }
+
+			var names []string
+			for i := range resourceCount {
+				names = append(names, fmt.Sprintf("endpoint-%d", i))
+				subscribed := names
+				expected := len(names)
+
+				require.NoError(t, send(subscribed))
+				require.Len(t, receive(), expected)
+			}
+			require.NoError(t, send(names))
+			// Send returning does not prove the server has processed the ACK.
+			// Wait for its deferred watch before publishing; otherwise an immediate
+			// CreateWatch response could bypass the publication path under scrutiny.
+			require.Eventually(t, func() bool { return watchCount() == 1 }, 5*time.Second, time.Millisecond,
+				"go-control-plane must replace the EDS watch when subscriptions change, rather than retain a watch per resource name")
+
+			require.NoError(t, cache.ApplyResources(ctx, localNodeID, xdsnew.ResourceMutations{Upserted: updated}, nil, typeurl.Set{}),
+				"publication must fit in the relay before responses can be collected; check watch replacement and response-channel ownership")
+			resources := receive()
+			require.Len(t, resources, resourceCount)
+			var seen set.Set[string]
+			for _, resource := range resources {
+				var assignment endpoint.ClusterLoadAssignment
+				require.NoError(t, resource.UnmarshalTo(&assignment))
+				require.False(t, seen.Has(assignment.GetClusterName()), "each subscribed name must be delivered once")
+				seen.Insert(assignment.GetClusterName())
+				require.True(t, proto.Equal(updated.Endpoints[assignment.GetClusterName()], &assignment),
+					"the response must contain the updated assignment for %q", assignment.GetClusterName())
+			}
+		})
+	}
 }
 
 func TestADSEmptyNamedSubscriptionStillProcessesACK(t *testing.T) {
@@ -83,8 +180,7 @@ func TestADSEmptyNamedSubscriptionStillProcessesACK(t *testing.T) {
 			t.Cleanup(wg.Cancel)
 			// The bulk server API does not wait for EDS/RDS/SDS. Use the
 			// production cache API to observe ACK handling through real gRPC.
-			completed := make(chan error, 1)
-			require.NoError(t, server.cache.ApplyResource(ctx, localNodeID, test.typeURL, "resource", test.initial, wg, func(err error) { completed <- err }))
+			require.NoError(t, server.cache.ApplyResource(ctx, localNodeID, test.typeURL, "resource", test.initial, wg))
 			stream, err := client.StreamAggregatedResources(ctx)
 			require.NoError(t, err)
 			require.NoError(t, stream.Send(&discovery.DiscoveryRequest{
@@ -97,11 +193,7 @@ func TestADSEmptyNamedSubscriptionStillProcessesACK(t *testing.T) {
 			marker, err := stream.Recv()
 			require.NoError(t, err)
 			require.Equal(t, ListenerTypeURL, marker.GetTypeUrl())
-			select {
-			case err := <-completed:
-				t.Fatalf("an empty subscription unexpectedly completed the update: %v", err)
-			default:
-			}
+			require.Equal(t, 1, server.cache.GetCompletionCallbacks().PendingCompletionCount(), "an empty subscription must not complete the update")
 
 			require.NoError(t, stream.Send(&discovery.DiscoveryRequest{TypeUrl: test.typeURL.URL(), ResourceNames: []string{"resource"}}))
 			response, err := stream.Recv()
@@ -119,10 +211,9 @@ func TestADSEmptyNamedSubscriptionStillProcessesACK(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, ClusterTypeURL, marker.GetTypeUrl())
 			require.NoError(t, wg.Wait())
-			require.NoError(t, <-completed)
-			require.Empty(t, completed, "the ACK callback must run exactly once")
+			require.Zero(t, server.cache.GetCompletionCallbacks().PendingCompletionCount())
 
-			require.NoError(t, server.cache.ApplyResource(ctx, localNodeID, test.typeURL, "resource", test.updated, nil, nil))
+			require.NoError(t, server.cache.ApplyResource(ctx, localNodeID, test.typeURL, "resource", test.updated, nil))
 			require.NoError(t, stream.Send(&discovery.DiscoveryRequest{
 				TypeUrl: test.typeURL.URL(), ResourceNames: []string{"resource"}, VersionInfo: response.GetVersionInfo(),
 			}))
@@ -220,7 +311,7 @@ func TestADSRecognizesInitializedNodes(t *testing.T) {
 	logger := hivetest.Logger(t)
 	cache := xdsnew.NewCache(logger, xdsnew.WithNodeIDs(localNodeID, nodeID))
 	server := newTestADSServerWithCache(t, cache, logger, nil, nil, xdsServerConfig{}, nil, nil)
-	require.NoError(t, cache.ApplyResource(t.Context(), nodeID, typeurl.Listener, "listener", &listener.Listener{Name: "listener"}, nil, nil))
+	require.NoError(t, cache.ApplyResource(t.Context(), nodeID, typeurl.Listener, "listener", &listener.Listener{Name: "listener"}, nil))
 	client := newTestADSClient(t, server)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()

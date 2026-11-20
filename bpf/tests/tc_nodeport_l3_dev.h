@@ -76,6 +76,8 @@ ASSIGN_CONFIG(union macaddr, interface_mac, router_mac)
 # include "lib/endpoint.h"
 #endif
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_ipv6, true)
 ASSIGN_CONFIG(bool, enable_bpf_host_routing, true)
 
 #include "lib/metrics.h"
@@ -191,7 +193,7 @@ l3_to_l2_fast_redirect_setup(struct __ctx_buff *ctx, bool is_ingress, bool is_ip
 		metrics_del_entry(is_ingress ? REASON_PLAINTEXT : REASON_FORWARDED,
 				  is_ingress ? METRIC_INGRESS : METRIC_EGRESS);
 	if (is_defined(IS_BPF_WIREGUARD))
-		metrics_del_entry(is_ingress ? REASON_DECRYPTING : REASON_ENCRYPTING,
+		metrics_del_entry(is_ingress ? REASON_DECRYPT : REASON_FORWARDED,
 				  is_ingress ? METRIC_INGRESS : METRIC_EGRESS);
 
 	if (is_ipv4)
@@ -243,7 +245,7 @@ ingress_l3_to_l2_fast_redirect_check(__maybe_unused const struct __ctx_buff *ctx
 		.reason = REASON_PLAINTEXT,
 #endif
 #if defined(IS_BPF_WIREGUARD)
-		.reason = REASON_DECRYPTING,
+		.reason = REASON_DECRYPT,
 #endif
 		.dir = METRIC_INGRESS,
 	};
@@ -419,12 +421,7 @@ egress_l3_to_l2_fast_redirect_check(__maybe_unused const struct __ctx_buff *ctx,
 
 	struct metrics_value *entry = NULL;
 	struct metrics_key key = {
-#if defined(IS_BPF_HOST)
 		.reason = REASON_FORWARDED,
-#endif
-#if defined(IS_BPF_WIREGUARD)
-		.reason = REASON_ENCRYPTING,
-#endif
 		.dir = METRIC_EGRESS,
 	};
 

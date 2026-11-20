@@ -86,6 +86,8 @@ long mock_fib_lookup(const __maybe_unused void *ctx, const struct bpf_fib_lookup
 /* Set port ranges to have deterministic source port selection */
 #include "nodeport_defaults.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_ipv6, true)
 ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 static __always_inline int

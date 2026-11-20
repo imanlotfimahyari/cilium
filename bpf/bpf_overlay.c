@@ -48,7 +48,6 @@
 #include "lib/arp.h"
 #include "lib/encap.h"
 
-#ifdef ENABLE_IPV6
 static __always_inline int handle_ipv6(struct __ctx_buff *ctx,
 				       __u32 *identity,
 				       __s8 *ext_err __maybe_unused)
@@ -134,18 +133,18 @@ static __always_inline int handle_ipv6(struct __ctx_buff *ctx,
 		}
 	}
 
-#if defined(DSR_ENCAP_MODE) && (DSR_ENCAP_MODE == DSR_ENCAP_GENEVE)
-	/* Pass incoming packets which will be returned using Geneve DSR
-	 * to host-stack for conntrack entry insertion.
-	 * Geneve DSR reply packets are processed by the host-stack,
-	 * so this logic is needed to prevent the packets from being handled
-	 * by netfilter in an unintended way.
-	 */
-	if (!CONFIG(enable_bpf_host_routing) && is_dsr) {
-		ctx_change_type(ctx, PACKET_HOST);
-		return CTX_ACT_OK;
+	if (CONFIG(dsr_cfg).dispatch_mode == DSR_DISPATCH_GENEVE) {
+		/* Pass incoming packets which will be returned using Geneve DSR
+		 * to host-stack for conntrack entry insertion.
+		 * Geneve DSR reply packets are processed by the host-stack,
+		 * so this logic is needed to prevent the packets from being handled
+		 * by netfilter in an unintended way.
+		 */
+		if (!CONFIG(enable_bpf_host_routing) && is_dsr) {
+			ctx_change_type(ctx, PACKET_HOST);
+			return CTX_ACT_OK;
+		}
 	}
-#endif
 
 	/* Deliver to local (non-host) endpoint: */
 	ep = lookup_ip6_endpoint(ip6);
@@ -174,7 +173,6 @@ int tail_handle_ipv6(struct __ctx_buff *ctx)
 						  METRIC_INGRESS);
 	return ret;
 }
-#endif /* ENABLE_IPV6 */
 
 #if defined(ENABLE_CLUSTER_AWARE_ADDRESSING) && defined(ENABLE_INTER_CLUSTER_SNAT)
 static __always_inline int handle_inter_cluster_revsnat(struct __ctx_buff *ctx,
@@ -372,18 +370,18 @@ static __always_inline int handle_ipv4(struct __ctx_buff *ctx,
 		}
 	}
 
-#if defined(DSR_ENCAP_MODE) && (DSR_ENCAP_MODE == DSR_ENCAP_GENEVE)
-	/* Pass incoming packets which will be returned using Geneve DSR
-	 * to host-stack for conntrack entry insertion.
-	 * Geneve DSR reply packets are processed by the host-stack,
-	 * so this logic is needed to prevent the packets from being handled
-	 * by netfilter in an unintended way.
-	 */
-	if (!CONFIG(enable_bpf_host_routing) && is_dsr) {
-		ctx_change_type(ctx, PACKET_HOST);
-		return CTX_ACT_OK;
+	if (CONFIG(dsr_cfg).dispatch_mode == DSR_DISPATCH_GENEVE) {
+		/* Pass incoming packets which will be returned using Geneve DSR
+		 * to host-stack for conntrack entry insertion.
+		 * Geneve DSR reply packets are processed by the host-stack,
+		 * so this logic is needed to prevent the packets from being handled
+		 * by netfilter in an unintended way.
+		 */
+		if (!CONFIG(enable_bpf_host_routing) && is_dsr) {
+			ctx_change_type(ctx, PACKET_HOST);
+			return CTX_ACT_OK;
+		}
 	}
-#endif
 
 	/* Deliver to local (non-host) endpoint: */
 	ep = lookup_ip4_endpoint(ip4);
@@ -503,6 +501,7 @@ resolve_srcid_from_tunnel(struct __ctx_buff *ctx, __be16 proto,
 __section_entry
 int cil_from_overlay(struct __ctx_buff *ctx)
 {
+	enum trace_reason reason = ctx_is_decrypt(ctx) ? TRACE_REASON_ENCRYPTED : TRACE_REASON_UNKNOWN;
 	__u32 src_sec_identity = 0;
 	__s8 ext_err = 0;
 	__be16 proto;
@@ -538,13 +537,14 @@ int cil_from_overlay(struct __ctx_buff *ctx)
 	}
 
 	switch (proto) {
-#ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6))
+			break;
+
 		ret = resolve_srcid_from_tunnel(ctx, proto, &src_sec_identity);
 		if (IS_ERR(ret))
 			goto out;
 		break;
-#endif
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4))
 			break;
@@ -559,15 +559,14 @@ int cil_from_overlay(struct __ctx_buff *ctx)
 
 	send_trace_notify(ctx, TRACE_FROM_OVERLAY, src_sec_identity, UNKNOWN_ID,
 			  TRACE_EP_ID_UNKNOWN, ctx->ingress_ifindex,
-			  TRACE_REASON_UNKNOWN, TRACE_PAYLOAD_LEN, proto);
+			  reason, TRACE_PAYLOAD_LEN, proto);
 
 	switch (proto) {
 	case bpf_htons(ETH_P_IPV6):
-#ifdef ENABLE_IPV6
-		ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_FROM_OVERLAY, &ext_err);
-#else
-		ret = DROP_UNKNOWN_L3;
-#endif
+		if (is_defined(ENABLE_IPV6))
+			ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_FROM_OVERLAY, &ext_err);
+		else
+			ret = DROP_UNKNOWN_L3;
 		break;
 
 	case bpf_htons(ETH_P_IP):
@@ -617,20 +616,20 @@ int cil_to_overlay(struct __ctx_buff *ctx)
 	/* Load the ethertype just once: */
 	validate_ethertype(ctx, &proto);
 
-#ifdef ENABLE_BANDWIDTH_MANAGER
-	/* In tunneling mode, we should do this as close as possible to the
-	 * phys dev where FQ runs, but the issue is that the aggregate state
-	 * (in queue_mapping) is overridden on tunnel xmit. Hence set the
-	 * timestamp already here. The tunnel dev has noqueue qdisc, so as
-	 * tradeoff it's close enough.
-	 */
-	ret = edt_sched_departure(ctx, proto);
-	/* No send_drop_notify_error() here given we're rate-limiting. */
-	if (ret < 0) {
-		update_metrics(ctx_full_len(ctx), METRIC_EGRESS, (__u8)-ret);
-		return CTX_ACT_DROP;
+	if (CONFIG(enable_bandwidth_manager)) {
+		/* In tunneling mode, we should do this as close as possible to the
+		 * phys dev where FQ runs, but the issue is that the aggregate state
+		 * (in queue_mapping) is overridden on tunnel xmit. Hence set the
+		 * timestamp already here. The tunnel dev has noqueue qdisc, so as
+		 * tradeoff it's close enough.
+		 */
+		ret = edt_sched_departure(ctx, proto);
+		/* No send_drop_notify_error() here given we're rate-limiting. */
+		if (ret < 0) {
+			update_metrics(ctx_full_len(ctx), METRIC_EGRESS, (__u8)-ret);
+			return CTX_ACT_DROP;
+		}
 	}
-#endif
 
 	/* This must be after above ctx_snat_done, since the MARK_MAGIC_CLUSTER_ID
 	 * is a super set of the MARK_MAGIC_SNAT_DONE. They will never be used together,

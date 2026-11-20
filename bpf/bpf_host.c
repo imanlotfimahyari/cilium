@@ -102,7 +102,6 @@ static __always_inline int rewrite_dmac_to_host(struct __ctx_buff *ctx)
 	return CTX_ACT_OK;
 }
 
-#ifdef ENABLE_IPV6
 static __always_inline __u32
 resolve_srcid_ipv6(const struct __ctx_buff *ctx, const struct ipv6hdr *ip6,
 		   __u32 real_sec_identity, __u32 *ipcache_sec_identity)
@@ -551,7 +550,6 @@ handle_to_netdev_ipv6(struct __ctx_buff *ctx, bool is_from_proxy, __u32 src_sec_
 	return ipv6_host_policy_egress(ctx, is_from_proxy, srcid, ipcache_srcid, ip6,
 				       trace, ext_err);
 }
-#endif /* ENABLE_IPV6 */
 
 static __always_inline __u32
 resolve_srcid_ipv4(const struct __ctx_buff *ctx, const struct iphdr *ip4,
@@ -1008,27 +1006,26 @@ handle_to_netdev_ipv4(struct __ctx_buff *ctx, bool is_from_proxy, __u32 src_sec_
 
 static __always_inline int
 do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
-	  enum trace_point obs_point, const bool from_host)
+	  enum trace_point obs_point, const bool from_host, const bool decrypted)
 {
 	struct trace_ctx trace = {
-		.reason = TRACE_REASON_UNKNOWN,
+		.reason = decrypted ? TRACE_REASON_ENCRYPTED : TRACE_REASON_UNKNOWN,
 		.monitor = TRACE_PAYLOAD_LEN,
 	};
-	fraginfo_t fraginfo = 0;
 	__u32 ipcache_srcid = 0;
 	enum metric_dir dir = METRIC_INGRESS;
 	void *data, *data_end;
-	struct ipv6hdr __maybe_unused *ip6;
+	struct ipv6hdr *ip6;
 	struct iphdr *ip4;
 	struct arp_eth *arp;
-	int hdrlen = 0;
-	__u8 next_proto = 0;
 	__s8 ext_err = 0;
 	int ret;
 
 	switch (proto) {
-#ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6))
+			goto unknown_l3;
+
 		if (!revalidate_data_pull(ctx, &data, &data_end, &ip6)) {
 			ret = DROP_INVALID;
 			goto drop_err_ingress;
@@ -1095,16 +1092,6 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 		if (CONFIG(enable_host_firewall) && from_host)
 			ctx_store_meta(ctx, CB_IPCACHE_SRC_LABEL, ipcache_srcid);
 
-		if (CONFIG(enable_wireguard) && !from_host) {
-			next_proto = ip6->nexthdr;
-			hdrlen = ipv6_hdrlen_with_fraginfo(ctx, &next_proto, &fraginfo);
-			if (likely(hdrlen > 0) &&
-			    ctx_is_wireguard(ctx, ETH_HLEN + hdrlen, next_proto, fraginfo,
-					     identity)) {
-				trace.reason = TRACE_REASON_ENCRYPTED;
-			}
-		}
-
 		send_trace_notify(ctx, obs_point, identity, UNKNOWN_ID, TRACE_EP_ID_UNKNOWN,
 				  ctx->ingress_ifindex, trace.reason, trace.monitor, proto);
 
@@ -1114,7 +1101,6 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 		/* See comment below for IPv4. */
 		return send_drop_notify_error_with_exitcode_ext(ctx, identity, ret, ext_err,
 								CTX_ACT_OK, METRIC_INGRESS);
-#endif
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4))
 			goto unknown_l3;
@@ -1187,16 +1173,6 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 		if (CONFIG(enable_host_firewall) && from_host)
 			ctx_store_meta(ctx, CB_IPCACHE_SRC_LABEL, ipcache_srcid);
 
-		if (CONFIG(enable_wireguard) && !from_host) {
-			next_proto = ip4->protocol;
-			hdrlen = ipv4_hdrlen(ip4);
-			fraginfo = ipfrag_encode_ipv4(ip4);
-			if (ctx_is_wireguard(ctx, ETH_HLEN + hdrlen, next_proto, fraginfo,
-					     identity)) {
-				trace.reason = TRACE_REASON_ENCRYPTED;
-			}
-		}
-
 		send_trace_notify(ctx, obs_point, identity, UNKNOWN_ID, TRACE_EP_ID_UNKNOWN,
 				  ctx->ingress_ifindex, trace.reason, trace.monitor, proto);
 
@@ -1260,6 +1236,7 @@ __section_entry
 int cil_from_netdev(struct __ctx_buff *ctx)
 {
 	__u32 src_id = UNKNOWN_ID;
+	bool decrypted = false;
 	__be16 proto = 0;
 	__u32 flags;
 
@@ -1310,6 +1287,9 @@ int cil_from_netdev(struct __ctx_buff *ctx)
 	}
 
 	if (CONFIG(enable_ipsec)) {
+		/* do_decrypt() clears the mark of decrypted packets. */
+		decrypted = ctx_is_decrypt(ctx);
+
 		/* If the packet needs decryption, we want to send it straight to the
 		 * stack. There's no need to run service handling logic, host firewall,
 		 * etc. on an encrypted packet.
@@ -1329,7 +1309,7 @@ int cil_from_netdev(struct __ctx_buff *ctx)
 	if (ret != CTX_ACT_OK)
 		goto drop_err;
 
-	return do_netdev(ctx, proto, UNKNOWN_ID, TRACE_FROM_NETWORK, false);
+	return do_netdev(ctx, proto, UNKNOWN_ID, TRACE_FROM_NETWORK, false, decrypted);
 drop_err:
 	return send_drop_notify_error(ctx, src_id, ret, METRIC_INGRESS);
 }
@@ -1384,7 +1364,7 @@ int cil_from_host(struct __ctx_buff *ctx)
 	if (magic == MARK_MAGIC_PROXY_INGRESS ||  magic == MARK_MAGIC_PROXY_EGRESS)
 		obs_point = TRACE_FROM_PROXY;
 
-	return do_netdev(ctx, proto, identity, obs_point, true);
+	return do_netdev(ctx, proto, identity, obs_point, true, false);
 }
 
 struct cil_to_netdev_cont_info {
@@ -1416,13 +1396,6 @@ int cil_to_netdev(struct __ctx_buff *ctx)
 	/* Load the ethertype just once: */
 	validate_ethertype(ctx, &proto);
 
-	/* Trace before clearing skb->cb */
-	if (CONFIG(enable_ipsec) && magic == MARK_MAGIC_ENCRYPT)
-		send_trace_notify(ctx, TRACE_FROM_STACK,
-				  get_encrypt_identity_meta(ctx), UNKNOWN_ID,
-				  TRACE_EP_ID_UNKNOWN, ctx->ingress_ifindex,
-				  TRACE_REASON_ENCRYPTED, 0, proto);
-
 	bpf_clear_meta(ctx);
 	check_and_store_ip_trace_id(ctx);
 
@@ -1448,6 +1421,18 @@ int cil_to_netdev(struct __ctx_buff *ctx)
 		}
 	}
 
+	/* L7 LB traffic is normally pulled into cilium_host by the
+	 * MARK_MAGIC_PROXY_EGRESS_EPID ip rule, so that cil_from_host is the
+	 * single place that re-enters the source endpoint's egress policy. This
+	 * is the fallback for when that rule is not in place: on upgrade from a
+	 * version that did not install it, cilium-envoy keeps proxying while the
+	 * agent reloads the datapath, and the rule is only installed at the end
+	 * of Reinitialize(). Without this block a remote backend would be
+	 * reached by a direct route with the egress policy never enforced.
+	 *
+	 * TODO: Remove in v1.22. The rule is installed since v1.21, and upgrades
+	 * are only supported from the previous minor release.
+	 */
 	if (CONFIG(enable_l7_lb) && magic == MARK_MAGIC_PROXY_EGRESS_EPID) {
 		__u32 lxc_id = get_epid(ctx);
 
@@ -1469,13 +1454,16 @@ int cil_to_netdev(struct __ctx_buff *ctx)
 		}
 
 		switch (proto) {
-# ifdef ENABLE_IPV6
 		case bpf_htons(ETH_P_IPV6):
+			if (!is_defined(ENABLE_IPV6)) {
+				ret = DROP_UNKNOWN_L3;
+				break;
+			}
+
 			ret = handle_to_netdev_ipv6(ctx,
 						    magic == MARK_MAGIC_PROXY_EGRESS,
 						    src_sec_identity, &trace, &ext_err);
 			break;
-# endif
 		case bpf_htons(ETH_P_IP): {
 			if (!is_defined(ENABLE_IPV4)) {
 				ret = DROP_UNKNOWN_L3;
@@ -1523,6 +1511,7 @@ static __always_inline int
 cil_to_netdev_cont(struct __ctx_buff *ctx, __u32 src_sec_identity,
 		   struct trace_ctx trace, __be16 proto)
 {
+	bool encrypted = ctx_is_encrypt(ctx);
 	__u32 dst_sec_identity = UNKNOWN_ID;
 	int ret = CTX_ACT_OK;
 	__s8 ext_err = 0;
@@ -1543,25 +1532,23 @@ cil_to_netdev_cont(struct __ctx_buff *ctx, __u32 src_sec_identity,
 			return ret;
 	}
 
-#if defined(ENABLE_BANDWIDTH_MANAGER)
-	ret = edt_sched_departure(ctx, proto);
-	/* No send_drop_notify_error() here given we're rate-limiting. */
-	if (ret < 0) {
-		update_metrics(ctx_full_len(ctx), METRIC_EGRESS, (__u8)-ret);
-		return CTX_ACT_DROP;
+	if (CONFIG(enable_bandwidth_manager)) {
+		ret = edt_sched_departure(ctx, proto);
+		/* No send_drop_notify_error() here given we're rate-limiting. */
+		if (ret < 0) {
+			update_metrics(ctx_full_len(ctx), METRIC_EGRESS, (__u8)-ret);
+			return CTX_ACT_DROP;
+		}
 	}
-#endif
 
 	if (CONFIG(enable_ipsec)) {
-		if (!ctx_is_encrypt(ctx)) {
+		if (!encrypted) {
 			ret = ipsec_maybe_redirect_to_encrypt(ctx, proto,
 							      src_sec_identity);
 			if (ret == CTX_ACT_REDIRECT)
 				return ret;
 			else if (IS_ERR(ret))
 				goto drop_err;
-		} else {
-			trace.reason |= TRACE_REASON_ENCRYPTED;
 		}
 	}
 
@@ -1585,14 +1572,12 @@ cil_to_netdev_cont(struct __ctx_buff *ctx, __u32 src_sec_identity,
 		 * encrypted WireGuard UDP packets), we check whether the mark
 		 * is set before the redirect.
 		 */
-		if (!ctx_is_encrypt(ctx)) {
+		if (!encrypted) {
 			ret = host_wg_encrypt_hook(ctx, proto, src_sec_identity);
 			if (ret == CTX_ACT_REDIRECT)
 				return ret;
 			else if (IS_ERR(ret))
 				goto drop_err;
-		} else {
-			trace.reason |= TRACE_REASON_ENCRYPTED;
 		}
 	}
 
@@ -1627,6 +1612,9 @@ exit:
 	if (IS_ERR(ret))
 		goto drop_err;
 
+	if (encrypted)
+		trace.reason |= TRACE_REASON_ENCRYPTED;
+
 	send_trace_notify(ctx, TRACE_TO_NETWORK, src_sec_identity, dst_sec_identity,
 			  TRACE_EP_ID_UNKNOWN, CONFIG(interface_ifindex),
 			  trace.reason, trace.monitor, proto);
@@ -1652,7 +1640,6 @@ int tail_cil_to_netdev_cont(struct __ctx_buff *ctx)
 	return cil_to_netdev_cont(ctx, src_sec_identity, trace, proto);
 }
 
-#ifdef ENABLE_IPV6
 __declare_tail(CILIUM_CALL_IPV6_TO_HOST_POLICY_ONLY)
 static __always_inline
 int tail_ipv6_host_policy_ingress(struct __ctx_buff *ctx)
@@ -1678,7 +1665,6 @@ int tail_ipv6_host_policy_ingress(struct __ctx_buff *ctx)
 
 	return ret;
 }
-#endif /* ENABLE_IPV6 */
 
 __declare_tail(CILIUM_CALL_IPV4_TO_HOST_POLICY_ONLY)
 static __always_inline
@@ -1722,8 +1708,12 @@ int host_ingress_policy(struct __ctx_buff *ctx, __be16 proto,
 		return ret;
 
 	switch (proto) {
-# ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		if (use_tailcall) {
 			ctx_store_meta(ctx, CB_SRC_LABEL, src_sec_identity);
 			ctx_store_meta(ctx, CB_TRACED, traced);
@@ -1735,7 +1725,6 @@ int host_ingress_policy(struct __ctx_buff *ctx, __be16 proto,
 		}
 
 		break;
-# endif
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4)) {
 			ret = DROP_UNKNOWN_L3;
@@ -1918,17 +1907,20 @@ from_host_to_lxc(struct __ctx_buff *ctx, __be16 proto, __s8 *ext_err)
 	int ret = CTX_ACT_OK;
 	void *data, *data_end;
 	struct iphdr *ip4;
-	struct ipv6hdr *ip6 __maybe_unused;
+	struct ipv6hdr *ip6;
 
 	switch (proto) {
-# ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		if (!revalidate_data(ctx, &data, &data_end, &ip6))
 			return DROP_INVALID;
 
 		ret = ipv6_host_policy_egress(ctx, false, HOST_ID, 0, ip6, &trace, ext_err);
 		break;
-# endif
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4)) {
 			ret = DROP_UNKNOWN_L3;

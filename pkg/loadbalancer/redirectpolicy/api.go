@@ -5,7 +5,6 @@ package redirectpolicy
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/cilium/statedb"
 	"github.com/go-openapi/runtime/middleware"
@@ -14,55 +13,55 @@ import (
 	"github.com/cilium/cilium/api/v1/server/restapi/service"
 	k8sTables "github.com/cilium/cilium/pkg/k8s/tables"
 	lb "github.com/cilium/cilium/pkg/loadbalancer"
+	lrpTypes "github.com/cilium/cilium/pkg/loadbalancer/redirectpolicy/types"
 )
 
 type getLrpHandler struct {
 	db        *statedb.DB
 	lrps      statedb.Table[*LocalRedirectPolicy]
 	frontends statedb.Table[*lb.Frontend]
-	backends  statedb.Table[*lb.Backend]
 	pods      statedb.Table[k8sTables.LocalPod]
 }
 
 func (h *getLrpHandler) Handle(params service.GetLrpParams) middleware.Responder {
-	return service.NewGetLrpOK().WithPayload(getLRPs(h.db.ReadTxn(), h.lrps, h.frontends, h.backends, h.pods))
+	return service.NewGetLrpOK().WithPayload(getLRPs(h.db.ReadTxn(), h.lrps, h.frontends, h.pods))
 }
 
-func getLRPs(txn statedb.ReadTxn, lrps statedb.Table[*LocalRedirectPolicy], frontends statedb.Table[*lb.Frontend], backends statedb.Table[*lb.Backend], pods statedb.Table[k8sTables.LocalPod]) []*models.LRPSpec {
+func getLRPs(txn statedb.ReadTxn, lrps statedb.Table[*LocalRedirectPolicy], frontends statedb.Table[*lb.Frontend], pods statedb.Table[k8sTables.LocalPod]) []*models.LRPSpec {
 	list := make([]*models.LRPSpec, 0, lrps.NumObjects(txn))
 	for lrp := range lrps.All(txn) {
-		list = append(list, lrp.getModel(txn, frontends, backends, pods))
+		list = append(list, lrp.getModel(txn, frontends, pods))
 	}
 	return list
 }
 
-func (lrp *LocalRedirectPolicy) getModel(txn statedb.ReadTxn, frontends statedb.Table[*lb.Frontend], backends statedb.Table[*lb.Backend], pods statedb.Table[k8sTables.LocalPod]) *models.LRPSpec {
+func (lrp *LocalRedirectPolicy) getModel(txn statedb.ReadTxn, frontends statedb.Table[*lb.Frontend], pods statedb.Table[k8sTables.LocalPod]) *models.LRPSpec {
 	if lrp == nil {
 		return nil
 	}
 
 	var feType, lrpType string
 	switch lrp.FrontendType {
-	case frontendTypeUnknown:
+	case lrpTypes.FrontendTypeUnknown:
 		feType = "unknown"
-	case svcFrontendAll:
+	case lrpTypes.FrontendTypeServiceAll:
 		feType = "clusterIP + all svc ports"
-	case svcFrontendNamedPorts:
+	case lrpTypes.FrontendTypeServiceNamedPorts:
 		feType = "clusterIP + named ports"
-	case svcFrontendSinglePort:
+	case lrpTypes.FrontendTypeServiceSinglePort:
 		feType = "clusterIP + port"
-	case addrFrontendSinglePort:
+	case lrpTypes.FrontendTypeAddressSinglePort:
 		feType = "IP + port"
-	case addrFrontendNamedPorts:
+	case lrpTypes.FrontendTypeAddressNamedPorts:
 		feType = "IP + named ports"
 	}
 
 	switch lrp.LRPType {
-	case lrpConfigTypeNone:
+	case lrpTypes.LRPTypeNone:
 		lrpType = "none"
-	case lrpConfigTypeAddr:
+	case lrpTypes.LRPTypeAddressMatcher:
 		lrpType = "addr"
-	case lrpConfigTypeSvc:
+	case lrpTypes.LRPTypeServiceMatcher:
 		lrpType = "svc"
 	}
 
@@ -73,7 +72,7 @@ func (lrp *LocalRedirectPolicy) getModel(txn statedb.ReadTxn, frontends statedb.
 		FrontendType:     feType,
 		LrpType:          lrpType,
 		ServiceID:        lrp.ServiceID.String(),
-		FrontendMappings: lrp.getFrontendMappingModels(txn, frontends, backends, pods),
+		FrontendMappings: lrp.getFrontendMappingModels(txn, frontends, pods),
 	}
 }
 
@@ -128,70 +127,38 @@ func getBackendModels(
 	return beModels
 }
 
-// filterBackendsByFrontendMapping narrows the backend list of a pseudo-service
-// generated from an addressMatcher LRP to a subset of pods that would actually
-// be mapped by the controller.
-func filterBackendsByFrontendMapping(
-	bes lb.BackendsSeq2,
-	feM feMapping,
-	matchPortNames bool,
-) lb.BackendsSeq2 {
-	backendMatchesFrontendMapping := func(be *lb.Backend) bool {
-		if !be.Address.Compatible(feM.feAddr) {
-			return false
-		}
-		if matchPortNames && feM.fePort != "" && len(be.PortNames) > 0 {
-			return slices.ContainsFunc(be.PortNames, func(portName string) bool {
-				return strings.EqualFold(portName, string(feM.fePort))
-			})
-		}
-		return true
-	}
-
-	return func(yield func(*lb.Backend, statedb.Revision) bool) {
-		for be, rev := range bes {
-			if !backendMatchesFrontendMapping(be) {
-				continue
-			}
-			if !yield(be, rev) {
-				return
-			}
-		}
-	}
-}
-
-// Returns an array of FrontendMapping models for a LocalRedirectPolicy based on the
-// StateDB frontend and backend tables.
+// Returns frontend mappings for a LocalRedirectPolicy using StateDB frontends and their
+// associated backends.
 func (lrp *LocalRedirectPolicy) getFrontendMappingModels(
 	txn statedb.ReadTxn,
 	frontends statedb.Table[*lb.Frontend],
-	backends statedb.Table[*lb.Backend],
 	pods statedb.Table[k8sTables.LocalPod],
 ) []*models.FrontendMapping {
 	podIDByIP := getPodIDByIP(txn, pods)
+	lrpServiceName := lrp.RedirectServiceName()
 
 	switch lrp.LRPType {
-	case lrpConfigTypeAddr:
-		// For addressMatcher LRPs, the configured frontend mappings are the source of
-		// truth for frontend information. Since these mappings do not carry writer-
-		// selected backends, filter the pseudo-service backends per mapping to match
-		// the frontend/backend association the writer would produce.
-		bes, _ := lb.ListBackendsByServiceName(txn, backends, lrp.RedirectServiceName())
-		preferredBackends := lb.BackendsSeq2(lb.PreferredBackendsByAddress(bes))
+	case lrpTypes.LRPTypeAddressMatcher:
+		// Only report mappings for frontends that this LRP currently owns. The
+		// configured mapping alone does not mean the redirect was installed: another
+		// service may own the same address.
 
-		numFrontendMapping := len(lrp.FrontendMappings)
-		matchNamedPorts := numFrontendMapping > 1
-
-		feMappingModelArray := make([]*models.FrontendMapping, 0, numFrontendMapping)
+		feMappingModelArray := make([]*models.FrontendMapping, 0, len(lrp.FrontendMappings))
 		for _, feM := range lrp.FrontendMappings {
+			fe, _, found := frontends.Get(txn, lb.FrontendByAddress(feM.feAddr))
+			if !found ||
+				fe.Type != lb.SVCTypeLocalRedirect ||
+				!fe.ServiceName.Equal(lrpServiceName) {
+				continue
+			}
+
 			feMappingModel := feM.getModel()
-			filteredBackends := filterBackendsByFrontendMapping(preferredBackends, feM, matchNamedPorts)
-			feMappingModel.Backends = getBackendModels(podIDByIP, filteredBackends)
+			feMappingModel.Backends = getBackendModels(podIDByIP, fe.Backends)
 			feMappingModelArray = append(feMappingModelArray, feMappingModel)
 		}
 		return feMappingModelArray
 
-	case lrpConfigTypeSvc:
+	case lrpTypes.LRPTypeServiceMatcher:
 		// for serviceMatcher LRPs, the internal frontendMapping has dummy IP address
 		// information in, so we don't use it here. Instead, we query StateDB for
 		// frontends associated with the matched service. We then build backend models
@@ -208,7 +175,6 @@ func (lrp *LocalRedirectPolicy) getFrontendMappingModels(
 			})
 		}
 
-		lrpServiceName := lrp.RedirectServiceName()
 		numFrontendMapping := len(lrp.FrontendMappings)
 
 		// Search for any redirected frontends
@@ -232,7 +198,7 @@ func (lrp *LocalRedirectPolicy) getFrontendMappingModels(
 			// Scenario 2, this frontend is not redirected, but whether it's candidate
 			// to be shown depends on the FrontendType.
 			switch lrp.FrontendType {
-			case svcFrontendAll:
+			case lrpTypes.FrontendTypeServiceAll:
 				// On an all-port serviceMatcher, if the service had been properly
 				// redirected then it would be included in scenario 1 above. Instead,
 				// we show this with FE with no backends so it's clear the frontend is
@@ -240,7 +206,7 @@ func (lrp *LocalRedirectPolicy) getFrontendMappingModels(
 				beModels := []*models.LRPBackend{}
 				appendFrontendMapping(fe, beModels)
 
-			case svcFrontendSinglePort:
+			case lrpTypes.FrontendTypeServiceSinglePort:
 				// On a single-port serviceMatcher, we include this frontend if its
 				// address matches the first frontend mapping exactly.
 				if numFrontendMapping == 0 {
@@ -253,7 +219,7 @@ func (lrp *LocalRedirectPolicy) getFrontendMappingModels(
 					appendFrontendMapping(fe, beModels)
 				}
 
-			case svcFrontendNamedPorts:
+			case lrpTypes.FrontendTypeServiceNamedPorts:
 				// On a named port serviceMatcher, for mapping to be successful the names
 				// must match between redirectBackend.toPorts, pod spec and service ports.
 				// In that case, if this FE matched, it would have been redirected and thus

@@ -51,11 +51,10 @@ jobs:
       deployment: false
     runs-on: ubuntu-26.04
     steps:
-      - name: Checkout base or default branch (trusted)
+      - name: Checkout base branch (trusted)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # This workflow is supposed to run only on pull_request_target context, but in case workflow call is made from a push context we still keep the default to default_branch
-          ref: ${{ github.base_ref || github.event.repository.default_branch }}
+          ref: ${{ github.base_ref || github.sha }}
           persist-credentials: false
 
       - name: Cleanup Disk space in runner
@@ -156,7 +155,7 @@ jobs:
 
       - name: Login to ${{ env.REGISTRY_DEV }}
         if: ${{ steps.cilium-runtime-tag-in-repositories.outputs.exists == 'false' }}
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.REGISTRY_DEV }}
           username: ${{ vars.QUAY_ROBOT_BASE }}
@@ -268,7 +267,7 @@ jobs:
 
       - name: Login to ${{ env.REGISTRY_DEV }}
         if: ${{ steps.cilium-builder-tag-in-repositories.outputs.exists == 'false' && steps.cilium-runtime-tag-in-repositories.outputs.exists != 'false' }}
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.REGISTRY_DEV }}
           username: ${{ vars.QUAY_ROBOT_BASE }}

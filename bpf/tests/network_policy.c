@@ -16,6 +16,9 @@
 #include "lib/policy.h"
 #include "network_policy_tuples.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_ipv6, true)
+
 #define REMOTE_IDENTITY		112233
 
 static __always_inline int

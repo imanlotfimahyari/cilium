@@ -15,11 +15,10 @@ struct {
 	__type(key, union v6addr);	/* ipv6 addr */
 	__type(value, union macaddr);	/* hw addr */
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
-	__uint(max_entries, NODEPORT_NEIGH6_SIZE);
+	__uint(max_entries, 524288);
 	__uint(map_flags, LRU_MEM_FLAVOR);
 } cilium_nodeport_neigh6 __section_maps_btf;
 
-#if defined(ENABLE_IPV6)
 static __always_inline int neigh_record_ip6(const struct __ctx_buff *ctx)
 {
 	union macaddr smac = {}, *mac;
@@ -45,25 +44,18 @@ static __always_inline int neigh_record_ip6(const struct __ctx_buff *ctx)
 static __always_inline const union macaddr *
 neigh_lookup_ip6(const union v6addr *addr)
 {
-	if (!NODEPORT_ENABLED)
+	if (!is_defined(ENABLE_IPV6) || !NODEPORT_ENABLED)
 		return NULL;
 
 	return map_lookup_elem(&cilium_nodeport_neigh6, addr);
 }
-#else
-static __always_inline const union macaddr *
-neigh_lookup_ip6(const union v6addr *addr __maybe_unused)
-{
-	return NULL;
-}
-#endif /* ENABLE_IPV6 */
 
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__type(key, __be32);		/* ipv4 addr */
 	__type(value, union macaddr);	/* hw addr */
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
-	__uint(max_entries, NODEPORT_NEIGH4_SIZE);
+	__uint(max_entries, 524288);
 	__uint(map_flags, LRU_MEM_FLAVOR);
 } cilium_nodeport_neigh4 __section_maps_btf;
 

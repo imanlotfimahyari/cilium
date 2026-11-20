@@ -37,7 +37,7 @@ func buildNRIDriverWithAlloc(t *testing.T, podUID kubetypes.UID, claimUID kubety
 	tlog := hivetest.Logger(t)
 	cs, _ := k8sClient.NewFakeClientset(tlog)
 	d := buildPrepDriver(t, cs)
-	d.podNetns = make(map[kubetypes.UID]string)
+	d.podNetns = make(map[string]string)
 	dev := &dummy.DummyDevice{Name: "dummy0"}
 	// Write the allocation into StateDB directly.
 	wtxn := d.db.WriteTxn(d.allocationTable)
@@ -123,12 +123,12 @@ func TestRecoverAllocationDevice(t *testing.T) {
 func TestStopPodSandbox_HostNetwork_Skipped(t *testing.T) {
 	d := buildNRIDriver(t)
 	// Pre-seed a cache entry to verify it is cleaned up even on the fast path.
-	d.podNetns["host-pod"] = ""
+	d.podNetns["host-pod-sandbox"] = ""
 
 	sb := podSandbox("host-pod", "")
 	err := d.StopPodSandbox(t.Context(), sb)
 	require.NoError(t, err)
-	assert.NotContains(t, d.podNetns, kubetypes.UID("host-pod"),
+	assert.NotContains(t, d.podNetns, sb.Id,
 		"cache entry must be evicted even for host-network pods")
 }
 
@@ -141,12 +141,12 @@ func TestStopPodSandbox_NoAllocation_Skipped(t *testing.T) {
 
 	// getNetworkNamespace falls back to the cache since the sandbox has no
 	// Linux namespaces populated (mimics containerd < 2.1 stop event).
-	sb := &api.PodSandbox{Uid: "no-alloc-pod", Linux: &api.LinuxPodSandbox{}}
+	sb := &api.PodSandbox{Id: "no-alloc-pod", Uid: "no-alloc-pod", Linux: &api.LinuxPodSandbox{}}
 
 	// No matching allocation exists, so this must exit before opening the netns.
 	err := d.StopPodSandbox(t.Context(), sb)
 	require.NoError(t, err)
-	assert.NotContains(t, d.podNetns, kubetypes.UID("no-alloc-pod"),
+	assert.NotContains(t, d.podNetns, sb.Id,
 		"cache entry must be evicted even when no allocation is found")
 }
 
@@ -159,15 +159,15 @@ func TestStopPodSandbox_NoAllocation_Skipped(t *testing.T) {
 func TestStopPodSandbox_FallbackCacheEvicted(t *testing.T) {
 	const podUID = kubetypes.UID("cache-pod-uid")
 	d := buildNRIDriverWithAlloc(t, podUID, "claim-uid")
-	d.podNetns[podUID] = "/run/netns/cached-ns"
+	d.podNetns[string(podUID)+"-sandbox"] = "/run/netns/cached-ns"
 
 	// No Linux namespaces in the sandbox — forces the cache fallback path.
-	sb := &api.PodSandbox{Uid: string(podUID), Linux: &api.LinuxPodSandbox{}}
+	sb := &api.PodSandbox{Id: string(podUID) + "-sandbox", Uid: string(podUID), Linux: &api.LinuxPodSandbox{}}
 
 	// Will fail at netns.OpenPinned because the path doesn't exist — that's fine.
 	_ = d.StopPodSandbox(t.Context(), sb)
 
 	// Cache entry must always be evicted (defer runs before the error path).
-	assert.NotContains(t, d.podNetns, podUID,
+	assert.NotContains(t, d.podNetns, sb.Id,
 		"cache entry must be evicted after StopPodSandbox regardless of netns errors")
 }

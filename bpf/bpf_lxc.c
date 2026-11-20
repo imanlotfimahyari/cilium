@@ -58,7 +58,7 @@
 #include "lib/vtep_return_core.h"
 #endif
 
-static __always_inline __maybe_unused int
+static __always_inline int
 lxc_deliver_to_host(struct __ctx_buff *ctx, __u32 src_sec_identity)
 {
 	int ret __maybe_unused;
@@ -75,7 +75,7 @@ lxc_deliver_to_host(struct __ctx_buff *ctx, __u32 src_sec_identity)
 	return DROP_HOST_NOT_READY;
 }
 
-static __always_inline __maybe_unused int
+static __always_inline int
 lxc_redirect_to_host(struct __ctx_buff *ctx, __u32 src_sec_identity,
 		     __be16 proto, struct trace_ctx *trace)
 {
@@ -274,7 +274,6 @@ skip_service_lookup:
 	return tail_call_internal(ctx, CILIUM_CALL_IPV4_CT_EGRESS, ext_err);
 }
 
-#ifdef ENABLE_IPV6
 /* lb6_ctx_restore_state() restores per packet load balancing state from the
  * previous tail call.
  * tuple->flags does not need to be restored, as it will be reinitialized from
@@ -429,7 +428,6 @@ skip_service_lookup:
 	lb6_ctx_store_state(ctx, &ct_state_new, proxy_port);
 	return tail_call_internal(ctx, CILIUM_CALL_IPV6_CT_EGRESS, ext_err);
 }
-#endif /* ENABLE_IPV6 */
 
 static __always_inline void *
 select_ct_map4(struct __ctx_buff *ctx __maybe_unused, int dir __maybe_unused,
@@ -455,8 +453,7 @@ static __always_inline int drop_for_direction(struct __ctx_buff *ctx,
 	__u32 src_label = 0;
 	__u32 sec_label = SECLABEL;
 
-#ifdef ENABLE_IPV6
-	if (is_defined(ENABLE_IPV4)) {
+	if (is_defined(ENABLE_IPV4) && is_defined(ENABLE_IPV6)) {
 		switch (ctx_get_protocol(ctx)) {
 		case bpf_htons(ETH_P_IP):
 			sec_label = SECLABEL_IPV4;
@@ -466,7 +463,6 @@ static __always_inline int drop_for_direction(struct __ctx_buff *ctx,
 			break;
 		}
 	}
-#endif
 
 	switch (dir) {
 	case CT_EGRESS:
@@ -623,7 +619,28 @@ int NAME(struct __ctx_buff *ctx)						\
 
 DEFINE_AUX(struct ct_buffer6, cilium_tail_call_buffer6);
 
-#ifdef ENABLE_IPV6
+/* Hairpin L7 LB traffic that was tail called from cil_from_host into
+ * cilium_host's ingress hook, so that the stack routes it.
+ *
+ * Unlike ipv{4,6}_host_delivery(), only the dst MAC is touched: the packet is
+ * forwarded rather than delivered to the host, and the stack decrements the
+ * TTL when it does so.
+ */
+static __always_inline int
+l7lb_redirect_to_stack(struct __ctx_buff *ctx)
+{
+	union macaddr host_mac = CONFIG(cilium_host_mac);
+
+	/* The destination MAC is what the kernel resolved for the nexthop of the
+	 * from-proxy route, which need not be cilium_host's. Without the
+	 * rewrite, cilium_host would drop the packet as PACKET_OTHERHOST.
+	 */
+	if (eth_store_daddr(ctx, (__u8 *)&host_mac.addr, 0) < 0)
+		return DROP_WRITE_ERROR;
+
+	return ctx_redirect(ctx, CONFIG(cilium_host_ifindex), BPF_F_INGRESS);
+}
+
 static __always_inline int
 ipv6_forward_to_destination(struct __ctx_buff *ctx, struct ipv6hdr *ip6,
 			    struct ipv6_ct_tuple *tuple,
@@ -685,7 +702,8 @@ ipv6_forward_to_destination(struct __ctx_buff *ctx, struct ipv6hdr *ip6,
 	if (CONFIG(enable_identity_mark))
 		set_identity_mark(ctx, SECLABEL_IPV6, MARK_MAGIC_IDENTITY);
 
-	if (CONFIG(enable_bpf_routing) || hairpin_flow || CONFIG(enable_bpf_host_routing)) {
+	if (CONFIG(enable_bpf_routing) || hairpin_flow || from_l7lb ||
+	    CONFIG(enable_bpf_host_routing)) {
 		const struct endpoint_info *ep;
 		union v6addr daddr;
 
@@ -709,7 +727,8 @@ ipv6_forward_to_destination(struct __ctx_buff *ctx, struct ipv6hdr *ip6,
 		ep = __lookup_ip6_endpoint(&daddr);
 		if (ep) {
 			if ((ep->flags & ENDPOINT_MASK_HOST_DELIVERY) &&
-			    (CONFIG(enable_bpf_host_routing) || CONFIG(enable_bpf_routing))) {
+			    (CONFIG(enable_bpf_host_routing) || CONFIG(enable_bpf_routing) ||
+			     from_l7lb)) {
 				if (CONFIG(enable_bpf_routing) &&
 				    CONFIG(enable_host_firewall) &&
 				    dst_sec_identity == HOST_ID)
@@ -771,11 +790,14 @@ ipv6_forward_to_destination(struct __ctx_buff *ctx, struct ipv6hdr *ip6,
 		}
 	}
 
-pass_to_stack: __maybe_unused
+pass_to_stack:
 	/* See IPv4 path for comments. */
-	if (!CONFIG(enable_bpf_routing) && from_l7lb &&
-	    ctx_get_ifindex(ctx) != CONFIG(cilium_host_ifindex))
+	if (!CONFIG(enable_bpf_routing) && from_l7lb) {
+		if (ctx_get_ifindex(ctx) == CONFIG(cilium_host_ifindex))
+			return l7lb_redirect_to_stack(ctx);
+
 		return redirect_self(ctx);
+	}
 
 	send_trace_notify(ctx, TRACE_TO_STACK, SECLABEL_IPV6, dst_sec_identity,
 			  TRACE_EP_ID_UNKNOWN, TRACE_IFINDEX_UNKNOWN,
@@ -805,7 +827,7 @@ static __always_inline int handle_ipv6_from_lxc(struct __ctx_buff *ctx, __u32 *d
 		.reason = TRACE_REASON_UNKNOWN,
 		.monitor = 0,
 	};
-	bool __maybe_unused skip_tunnel = false;
+	bool skip_tunnel = false;
 	bool hairpin_flow = false;
 	enum ct_status ct_status;
 	__u8 policy_match_type = POLICY_MATCH_NONE;
@@ -1070,7 +1092,6 @@ int tail_handle_ipv6(struct __ctx_buff *ctx)
 						  METRIC_EGRESS);
 	return ret;
 }
-#endif /* ENABLE_IPV6 */
 
 DEFINE_AUX(struct ct_buffer4, cilium_tail_call_buffer4);
 
@@ -1089,7 +1110,7 @@ ipv4_forward_to_destination(struct __ctx_buff *ctx, struct iphdr *ip4,
 			    struct trace_ctx *trace,
 			    __s8 *ext_err)
 {
-	struct remote_endpoint_info __maybe_unused fake_info = {0};
+	struct remote_endpoint_info fake_info = {0};
 	int ret;
 #ifdef ENABLE_VTEP_RETURN_SOCKET_AFFINITY
 	bool native_local_host = false;
@@ -1167,8 +1188,21 @@ ipv4_forward_to_destination(struct __ctx_buff *ctx, struct iphdr *ip4,
 	 * packet up the stack for the host itself. We also want to run through
 	 * the ipv4_local_delivery() function to enforce ingress policies for
 	 * that endpoint.
+	 *
+	 * L7 LB traffic is normally tail called here from cil_from_host, ie.
+	 * the ctx sits on cilium_host's egress hook rather than on the device
+	 * the packet is leaving by. Look the endpoint up for it as well, so
+	 * that a local backend is delivered here instead of falling through to
+	 * pass_to_stack, which cannot forward it from cilium_host. While the
+	 * MARK_MAGIC_PROXY_EGRESS_EPID ip rule is not in place yet, it is tail
+	 * called from the fallbacks in cil_to_container and cil_to_netdev
+	 * instead: the lookup delivers a local backend the same way, and
+	 * misses for a remote one, which continues at pass_to_stack.
+	 *
+	 * TODO: Remove in v1.22, together with those fallbacks.
 	 */
-	if (CONFIG(enable_bpf_routing) || hairpin_flow || CONFIG(enable_bpf_host_routing)) {
+	if (CONFIG(enable_bpf_routing) || hairpin_flow || from_l7lb ||
+	    CONFIG(enable_bpf_host_routing)) {
 		__be32 daddr = ip4->daddr;
 		const struct endpoint_info *ep;
 
@@ -1192,7 +1226,8 @@ ipv4_forward_to_destination(struct __ctx_buff *ctx, struct iphdr *ip4,
 		ep = __lookup_ip4_endpoint(daddr);
 		if (ep) {
 			if ((ep->flags & ENDPOINT_MASK_HOST_DELIVERY) &&
-			    (CONFIG(enable_bpf_host_routing) || CONFIG(enable_bpf_routing))) {
+			    (CONFIG(enable_bpf_host_routing) || CONFIG(enable_bpf_routing) ||
+			     from_l7lb)) {
 				if (CONFIG(enable_bpf_routing) &&
 				    CONFIG(enable_host_firewall) &&
 				    dst_sec_identity == HOST_ID)
@@ -1338,18 +1373,33 @@ pass_to_stack: __maybe_unused
 	if (ip4->protocol == IPPROTO_TCP && !native_local_host)
 		return DROP_NO_FIB;
 #endif
-	/* With per-endpoint routes, the `cil_lxc_policy_egress` will be
-	 * tail called from cil_to_container for packets sent by a L7 LB.
-	 * In case of a local backend, we execute this code already from the
-	 * backend pod ingress path, and returning CTX_ACT_OK would completely
-	 * bypass ingress policies. Therefore, we need to hairpin the packet
-	 * back to cil_to_container to ensure ingress policies are applied.
-	 * Without per-endpoint routes, endpoint policies are correctly
-	 * checked via tail call from bpf_host.
+	/* L7 LB traffic reaches this label whenever the endpoint lookup above
+	 * did not deliver it: for a remote backend, or for one delivered to the
+	 * host. How it continues depends on which hook `cil_lxc_policy_egress`
+	 * was tail called from.
+	 *
+	 * Normally that is cil_from_host. Returning CTX_ACT_OK on cilium_host's
+	 * egress hook would transmit the packet into the cilium_host/cilium_net
+	 * veth pair rather than route it, so hairpin it into cilium_host's
+	 * ingress hook instead and let the stack route it. Going through the
+	 * stack also keeps the ip rules that select an egress device by source
+	 * address - the per-ENI rules on AWS, for one - which a FIB lookup here
+	 * would not consult.
+	 *
+	 * While the MARK_MAGIC_PROXY_EGRESS_EPID ip rule is not in place yet, it
+	 * is the fallback in cil_to_container or cil_to_netdev instead. The ctx
+	 * then already sits on the device the packet is leaving by, so loop it
+	 * back out of that device, where the hook sees it again with the mark
+	 * cleared.
+	 *
+	 * TODO: Remove in v1.22, together with the redirect_self() call below.
 	 */
-	if (!CONFIG(enable_bpf_routing) && from_l7lb &&
-	    ctx_get_ifindex(ctx) != CONFIG(cilium_host_ifindex))
+	if (!CONFIG(enable_bpf_routing) && from_l7lb) {
+		if (ctx_get_ifindex(ctx) == CONFIG(cilium_host_ifindex))
+			return l7lb_redirect_to_stack(ctx);
+
 		return redirect_self(ctx);
+	}
 
 	send_trace_notify(ctx, TRACE_TO_STACK, SECLABEL_IPV4, dst_sec_identity,
 			  TRACE_EP_ID_UNKNOWN, TRACE_IFINDEX_UNKNOWN,
@@ -1376,7 +1426,7 @@ static __always_inline int handle_ipv4_from_lxc(struct __ctx_buff *ctx, __u32 *d
 		.reason = TRACE_REASON_UNKNOWN,
 		.monitor = 0,
 	};
-	bool __maybe_unused skip_tunnel = false;
+	bool skip_tunnel = false;
 	bool hairpin_flow = false; /* endpoint wants to access itself via service IP */
 	__u8 policy_match_type = POLICY_MATCH_NONE;
 	struct ct_buffer4 *ct_buffer;
@@ -1613,7 +1663,7 @@ TAIL_CT_LOOKUP4(CILIUM_CALL_IPV4_CT_EGRESS, tail_ipv4_ct_egress, CT_EGRESS,
 		CILIUM_CALL_IPV4_FROM_LXC_CONT, tail_handle_ipv4_cont)
 
 static __always_inline int __tail_handle_ipv4(struct __ctx_buff *ctx,
-					      __s8 *ext_err __maybe_unused)
+					      __s8 *ext_err)
 {
 	void *data, *data_end;
 	struct iphdr *ip4;
@@ -1754,12 +1804,15 @@ int cil_from_container(struct __ctx_buff *ctx)
 		goto out;
 
 	switch (proto) {
-#ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_FROM_LXC, &ext_err);
 		sec_label = SECLABEL_IPV6;
 		break;
-#endif /* ENABLE_IPV6 */
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4)) {
 			ret = DROP_UNKNOWN_L3;
@@ -1792,7 +1845,6 @@ out:
 	return ret;
 }
 
-#ifdef ENABLE_IPV6
 static __always_inline int
 ipv6_policy(struct __ctx_buff *ctx, struct ipv6hdr *ip6, __u32 src_label,
 	    struct ipv6_ct_tuple *tuple_out, __s8 *ext_err, __u16 *proxy_port,
@@ -1808,7 +1860,7 @@ ipv6_policy(struct __ctx_buff *ctx, struct ipv6hdr *ip6, __u32 src_label,
 	union v6addr orig_sip __align_stack_8;
 	__u8 policy_match_type = POLICY_MATCH_NONE;
 	__u8 audited = 0;
-	__maybe_unused union v6addr loopback_addr;
+	union v6addr loopback_addr;
 	__u32 cookie = 0;
 
 	ipv6_addr_copy(&orig_sip, (union v6addr *)&ip6->saddr);
@@ -1897,6 +1949,13 @@ ipv6_policy(struct __ctx_buff *ctx, struct ipv6hdr *ip6, __u32 src_label,
 
 		if (verdict != CTX_ACT_OK)
 			return verdict;
+
+		/* Recreate the entry if proxy_redirect is stale. Otherwise the
+		 * reply is redirected (or not) based on the old flag.
+		 */
+		if (unlikely(ret == CT_ESTABLISHED &&
+			     ct_state->proxy_redirect != (*proxy_port > 0)))
+			ret = CT_NEW;
 
 		break;
 	}
@@ -2075,7 +2134,6 @@ TAIL_CT_LOOKUP6(CILIUM_CALL_IPV6_CT_INGRESS_POLICY_ONLY,
 
 TAIL_CT_LOOKUP6(CILIUM_CALL_IPV6_CT_INGRESS, tail_ipv6_ct_ingress, CT_INGRESS,
 		1, CILIUM_CALL_IPV6_TO_ENDPOINT, tail_ipv6_to_endpoint)
-#endif /* ENABLE_IPV6 */
 
 static __always_inline int
 ipv4_policy(struct __ctx_buff *ctx, struct iphdr *ip4, __u32 src_label,
@@ -2189,6 +2247,13 @@ ipv4_policy(struct __ctx_buff *ctx, struct iphdr *ip4, __u32 src_label,
 
 		if (verdict != CTX_ACT_OK)
 			return verdict;
+
+		/* Recreate the entry if proxy_redirect is stale. Otherwise the
+		 * reply is redirected (or not) based on the old flag.
+		 */
+		if (unlikely(ret == CT_ESTABLISHED &&
+			     ct_state->proxy_redirect != (*proxy_port > 0)))
+			ret = CT_NEW;
 
 		break;
 	}
@@ -2422,8 +2487,12 @@ int cil_lxc_policy(struct __ctx_buff *ctx)
 		goto out;
 
 	switch (proto) {
-#ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		if (is_defined(ENABLE_IPV4) && is_defined(ENABLE_IPV6))
 			ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_CT_INGRESS_POLICY_ONLY,
 						 &ext_err);
@@ -2431,7 +2500,6 @@ int cil_lxc_policy(struct __ctx_buff *ctx)
 			ret = tail_ipv6_ct_ingress_policy_only(ctx);
 		sec_label = SECLABEL_IPV6;
 		break;
-#endif /* ENABLE_IPV6 */
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4)) {
 			ret = DROP_UNKNOWN_L3;
@@ -2466,7 +2534,7 @@ out:
  * a L7 LB.
  */
 __section_entry
-int cil_lxc_policy_egress(struct __ctx_buff *ctx __maybe_unused)
+int cil_lxc_policy_egress(struct __ctx_buff *ctx)
 {
 	if (!CONFIG(enable_l7_lb))
 		return CTX_ACT_OK;
@@ -2493,12 +2561,15 @@ int cil_lxc_policy_egress(struct __ctx_buff *ctx __maybe_unused)
 		goto out;
 
 	switch (proto) {
-#ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_FROM_LXC, &ext_err);
 		sec_label = SECLABEL_IPV6;
 		break;
-#endif /* ENABLE_IPV6 */
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4)) {
 			ret = DROP_UNKNOWN_L3;
@@ -2543,6 +2614,25 @@ int cil_to_container(struct __ctx_buff *ctx)
 	bpf_clear_meta(ctx);
 	check_and_store_ip_trace_id(ctx);
 
+	/* Fallback for when the MARK_MAGIC_PROXY_EGRESS_EPID ip rule is missing
+	 * and a per-endpoint route steers L7 LB traffic straight at the backend's
+	 * lxc device instead of into cilium_host. See the equivalent block in
+	 * cil_to_netdev(), and note that inherit_identity_from_host() below has
+	 * no case for this mark: without this block the source endpoint's egress
+	 * policy would be skipped and ingress policy evaluated against WORLD_ID
+	 * rather than the client's identity.
+	 *
+	 * Entering the egress policy program from here is equivalent to entering
+	 * it from cil_from_host: the endpoint lookup opened for from_l7lb finds
+	 * the backend and calls ipv{4,6}_local_delivery(), which ends in
+	 * redirect_ep(ctx, ep->ifindex). As cil_to_container sits on that same
+	 * lxc device's egress hook, the packet re-enters here with the mark
+	 * cleared, as with the redirect_self() taken at pass_to_stack, and
+	 * ingress policy is enforced.
+	 *
+	 * TODO: Remove in v1.22. The rule is installed since v1.21, and upgrades
+	 * are only supported from the previous minor release.
+	 */
 	if (CONFIG(enable_l7_lb) &&
 	    (ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_PROXY_EGRESS_EPID) {
 		__u16 lxc_id = get_epid(ctx);
@@ -2584,13 +2674,16 @@ int cil_to_container(struct __ctx_buff *ctx)
 		goto out;
 
 	switch (proto) {
-#ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6)) {
+			ret = DROP_UNKNOWN_L3;
+			break;
+		}
+
 		sec_label = SECLABEL_IPV6;
 		ctx_store_meta(ctx, CB_SRC_LABEL, identity);
 		ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_CT_INGRESS, &ext_err);
 		break;
-#endif /* ENABLE_IPV6 */
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4)) {
 			ret = DROP_UNKNOWN_L3;
@@ -2646,7 +2739,6 @@ int tail_policy_denied_ipv4(struct __ctx_buff *ctx)
 	return send_drop_notify_error(ctx, SECLABEL_IPV4, verdict, METRIC_EGRESS);
 }
 
-#ifdef ENABLE_IPV6
 __declare_tail(CILIUM_CALL_IPV6_POLICY_DENIED)
 int tail_policy_denied_ipv6(struct __ctx_buff *ctx)
 {
@@ -2684,6 +2776,5 @@ int tail_policy_denied_ipv6(struct __ctx_buff *ctx)
 drop_err:
 	return send_drop_notify_error(ctx, SECLABEL_IPV6, verdict, METRIC_EGRESS);
 }
-#endif /* ENABLE_IPV6 */
 
 BPF_LICENSE("Dual BSD/GPL");

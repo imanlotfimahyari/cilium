@@ -19,48 +19,6 @@
 DECLARE_CONFIG(__u32, wg_ifindex, "Index of the WireGuard interface.")
 DECLARE_CONFIG(__u16, wg_port, "Port for the WireGuard interface.")
 
-/* ctx_is_wireguard is used to check whether ctx is a WireGuard network packet.
- * This function returns true in case all the following conditions are satisfied:
- *
- * - ctx is a UDP packet;
- * - L4 dport == CONFIG(wg_port);
- * - L4 sport == dport;
- * - valid remote node identity.
- */
-static __always_inline bool
-ctx_is_wireguard(struct __ctx_buff *ctx, int l4_off, __u8 protocol, fraginfo_t fraginfo,
-		 __u32 identity)
-{
-	struct {
-		__be16 sport;
-		__be16 dport;
-	} l4;
-
-	/* Non-UDP packets. */
-	if (protocol != IPPROTO_UDP)
-		return false;
-
-	/* Unable to retrieve L4 ports. */
-	if (!ipfrag_has_l4_header(fraginfo) ||
-	    l4_load_ports(ctx, l4_off + UDP_SPORT_OFF, &l4.sport) < 0)
-		return false;
-
-	/* Packet is not for cilium@WireGuard.*/
-	if (l4.dport != bpf_htons(CONFIG(wg_port)))
-		return false;
-
-	/* Packet does not come from cilium@WireGuard. */
-	if (l4.sport != l4.dport)
-		return false;
-
-	/* Identity is not a remote node. */
-	if (!identity_is_remote_node(identity))
-		return false;
-
-	/* Cilium-related WireGuard packet to be traced as encrypted. */
-	return true;
-}
-
 static __always_inline int
 wg_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 			     __u32 src_sec_identity)
@@ -68,7 +26,7 @@ wg_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 	const struct remote_endpoint_info *dst = NULL;
 	const struct remote_endpoint_info *src = NULL;
 	void *data, *data_end;
-	struct ipv6hdr __maybe_unused *ip6;
+	struct ipv6hdr *ip6;
 	struct iphdr *ip4;
 	__u32 magic __maybe_unused = 0;
 
@@ -84,8 +42,10 @@ wg_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 		return DROP_UNSUPPORTED_L2;
 
 	switch (proto) {
-#ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6))
+			goto out;
+
 		if (!revalidate_data(ctx, &data, &data_end, &ip6))
 			return DROP_INVALID;
 #ifdef ENABLE_NODE_ENCRYPTION
@@ -117,7 +77,6 @@ wg_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 			src_sec_identity = src->sec_identity;
 		}
 		break;
-#endif
 	case bpf_htons(ETH_P_IP):
 		if (!is_defined(ENABLE_IPV4))
 			goto out;

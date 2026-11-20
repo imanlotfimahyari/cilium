@@ -3,12 +3,12 @@
 # Copyright Authors of Cilium
 # SPDX-License-Identifier: Apache-2.0
 
-ARG CILIUM_BUILDER_IMAGE=quay.io/cilium/cilium-builder:502b04df7185978d342e53d4fcfd4a4275a4d9f4@sha256:236519d1f7b8765e7060960de92355f522039d0033dc92b5b89772ccf26ce770
-ARG CILIUM_RUNTIME_IMAGE=quay.io/cilium/cilium-runtime:4017c7cc791ce2266241601c5d0ff6dbf93c1b97@sha256:ad083fed20e51c3dba79c7d8dab60d55e31cea5116f195dbe1ceb17165ec19fd
+ARG CILIUM_BUILDER_IMAGE=quay.io/cilium/cilium-builder:d2143d4e7a855111e48bc513a90595c1ccc77214@sha256:77e6f822ad63e75c97af07a782105ddedb35a93e11fcaf244ea0e9d5cda8f509
+ARG CILIUM_RUNTIME_IMAGE=quay.io/cilium/cilium-runtime:4ce28a8f0e05d2224ad5ee81282b65f32602ce39@sha256:5792b6da9487c2b1520a8f394a6a41765d9536673df5d0531e34c23f8cf3e282
 #
 # cilium-envoy from github.com/cilium/proxy
 #
-ARG CILIUM_ENVOY_IMAGE=quay.io/cilium/cilium-envoy:v1.40.2-1793191753-2b268f098fb50df0c1201524291992f48a959074@sha256:c37bb9e4c61e5f54b8a60445097aaf831ab149001166acb2405c4c529a51ee22
+ARG CILIUM_ENVOY_IMAGE=quay.io/cilium/cilium-envoy:v1.40.2-1794557816-ede493956119acdc9268141721943eebe7da482c@sha256:96d64e483774aa6e9d5ea7585d3048f848c6f19c26c56d649f44818264dd0378
 
 FROM ${CILIUM_ENVOY_IMAGE} AS cilium-envoy
 
@@ -78,7 +78,6 @@ RUN for f in $(find /tmp/debug -type f -name '*.debug') ; do readelf -S ${f} | g
     (echo Debug symbols are missing in ${f} - possibly due to incorrect build parameters && false); done
 
 COPY images/cilium/init-container.sh \
-     plugins/cilium-cni/install-plugin.sh \
      plugins/cilium-cni/cni-uninstall.sh \
        /tmp/install/${TARGETOS}/${TARGETARCH}
 

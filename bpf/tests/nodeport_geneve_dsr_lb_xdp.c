@@ -8,8 +8,6 @@
 /* Enable code paths under test */
 #define ENABLE_IPV4 1
 
-#define DSR_ENCAP_MODE		DSR_ENCAP_GENEVE
-
 #define ENCAP_IFINDEX		42
 #define TUNNEL_MODE 1
 
@@ -74,10 +72,11 @@ long mock_fib_lookup(__maybe_unused void *ctx, struct bpf_fib_lookup *params,
 #include "lib/ipcache.h"
 #include "lib/lb.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, enable_endpoint_routes, true)
 ASSIGN_CONFIG(__u8, tunnel_protocol, TUNNEL_PROTOCOL_GENEVE)
 ASSIGN_CONFIG(union v4addr, ipv4_direct_routing, { .be32 = LB_IP })
-ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true })
+ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true, .dispatch_mode = DSR_DISPATCH_GENEVE })
 ASSIGN_CONFIG(bool, enable_nodeport_acceleration, true)
 ASSIGN_CONFIG(bool, enable_nodeport, true)
 

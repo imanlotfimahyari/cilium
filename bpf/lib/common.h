@@ -36,10 +36,6 @@
 #define ENABLE_EGRESS_GATEWAY_COMMON 1
 #endif
 
-#ifndef DSR_ENCAP_MODE
-#define DSR_ENCAP_MODE DSR_ENCAP_INVALID
-#endif
-
 #ifndef ENCAP_IFINDEX
 #define ENCAP_IFINDEX 0
 #endif
@@ -47,7 +43,7 @@
 /* TUNNEL_MODE needs the encapsulation helpers guarded by HAVE_ENCAP. */
 #define HAVE_ENCAP ((ENCAP_IFINDEX != 0) || is_defined(ENABLE_EGRESS_GATEWAY_COMMON) || \
 	is_defined(TUNNEL_MODE) || \
-	(DSR_ENCAP_MODE == DSR_ENCAP_GENEVE))
+	(CONFIG(dsr_cfg).dispatch_mode == DSR_DISPATCH_GENEVE))
 
 /* XFER_FLAGS that get transferred from XDP to SKB */
 enum {
@@ -168,10 +164,12 @@ __revalidate_data_pull(const struct __ctx_buff *ctx, void **data_, void **data_e
 #define REASON_LB_REVNAT_STALE		8
 #define REASON_FRAG_PACKET		9
 #define REASON_FRAG_PACKET_UPDATE	10
-#define REASON_DECRYPTING			12
-#define REASON_ENCRYPTING			13
+#define REASON_RESERVED_0		11 /* was REASON_MISSED_CUSTOM_CALL */
+#define REASON_RESERVED_1		12 /* was REASON_ENCRYPTING */
+#define REASON_RESERVED_2		13 /* was REASON_DECRYPTING */
 #define REASON_LB_REVNAT_DELETE		14
 #define REASON_MTU_ERROR_MSG			15
+#define REASON_ENCRYPT			16
 
 /* Cilium metrics direction for dropping/forwarding packet */
 enum metric_dir {

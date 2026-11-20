@@ -290,21 +290,23 @@ func (rs resourceStore) equal(other resourceStore) bool {
 	return maps.EqualFunc(rs, other, proto.Equal)
 }
 
+// Retain independent snapshots: the reconciler may reuse and modify its
+// protobufs after this call returns, outside the fake server's lock.
 func (rs resourceStore) update(res *xds.Resources) {
 	for _, l := range res.Listeners {
-		rs[resourceKey{kind: listenerKey, name: l.Name}.String()] = l
+		rs[resourceKey{kind: listenerKey, name: l.Name}.String()] = proto.Clone(l)
 	}
 	for _, s := range res.Secrets {
-		rs[resourceKey{kind: secretKey, name: s.Name}.String()] = s
+		rs[resourceKey{kind: secretKey, name: s.Name}.String()] = proto.Clone(s)
 	}
 	for _, r := range res.Routes {
-		rs[resourceKey{kind: routeKey, name: r.Name}.String()] = r
+		rs[resourceKey{kind: routeKey, name: r.Name}.String()] = proto.Clone(r)
 	}
 	for _, c := range res.Clusters {
-		rs[resourceKey{kind: clustersKey, name: c.Name}.String()] = c
+		rs[resourceKey{kind: clustersKey, name: c.Name}.String()] = proto.Clone(c)
 	}
 	for _, e := range res.Endpoints {
-		rs[resourceKey{kind: endpointsKey, name: e.ClusterName}.String()] = e
+		rs[resourceKey{kind: endpointsKey, name: e.ClusterName}.String()] = proto.Clone(e)
 	}
 }
 
@@ -330,6 +332,7 @@ type fakeEnvoySyncerAndPolicyTrigger struct {
 	lock.Mutex
 	store              resourceStore
 	policyTriggerCount int
+	beforeUpdate       func(context.Context, xds.Resources, xds.Resources) error
 }
 
 type section struct {
@@ -460,11 +463,6 @@ func (f *fakeEnvoySyncerAndPolicyTrigger) DeleteEnvoyResources(ctx context.Conte
 	defer f.Unlock()
 	f.store.delete(&res)
 
-	for _, listener := range res.Listeners {
-		if cb := res.PortAllocationCallbacks[listener.Name]; cb != nil {
-			cb(ctx)
-		}
-	}
 	return nil
 }
 
@@ -472,22 +470,13 @@ func (f *fakeEnvoySyncerAndPolicyTrigger) DeleteEnvoyResources(ctx context.Conte
 func (f *fakeEnvoySyncerAndPolicyTrigger) UpdateEnvoyResources(ctx context.Context, old xds.Resources, new xds.Resources, waitGroup *completion.WaitGroup) error {
 	f.Lock()
 	defer f.Unlock()
+	if f.beforeUpdate != nil {
+		if err := f.beforeUpdate(ctx, old, new); err != nil {
+			return err
+		}
+	}
 	f.store.delete(&old)
 	f.store.update(&new)
-
-	for _, oldListener := range old.Listeners {
-		for _, newListener := range new.Listeners {
-			if newListener.Name == oldListener.Name {
-				delete(new.PortAllocationCallbacks, newListener.Name)
-			}
-		}
-	}
-
-	for _, listener := range new.Listeners {
-		if cb := new.PortAllocationCallbacks[listener.Name]; cb != nil {
-			cb(ctx)
-		}
-	}
 
 	return nil
 }
@@ -514,9 +503,13 @@ func (s staticPortAllocator) RestoreComplete() <-chan struct{} {
 	return ch
 }
 
-// AckProxyPort implements PortAllocator.
-func (s staticPortAllocator) AckProxyPortWithReference(ctx context.Context, name string) error {
-	s.log.Info("AckProxyPort", logfields.Listener, name)
+func (s staticPortAllocator) GetProxyPort(name string) (uint16, bool, error) {
+	return 1000, false, nil
+}
+
+// AckCRDProxyPort implements PortAllocator.
+func (s staticPortAllocator) AckCRDProxyPort(ctx context.Context, name string, expectedPort uint16) error {
+	s.log.Info("AckCRDProxyPort", logfields.Listener, name)
 	return nil
 }
 
@@ -526,13 +519,13 @@ func (s staticPortAllocator) AllocateCRDProxyPort(name string) (uint16, error) {
 }
 
 // ReallocateCRDProxyPort implements PortAllocator.
-func (s staticPortAllocator) ReallocateCRDProxyPort(name string) (uint16, error) {
+func (s staticPortAllocator) ReallocateCRDProxyPort(name string, expectedPort uint16) (uint16, error) {
 	return 1001, nil
 }
 
-// ReleaseProxyPort implements PortAllocator.
-func (s staticPortAllocator) ReleaseProxyPort(name string) error {
-	s.log.Info("ReleaseProxyPort", logfields.Listener, name)
+// ReleaseCRDProxyPort implements PortAllocator.
+func (s staticPortAllocator) ReleaseCRDProxyPort(name string) error {
+	s.log.Info("ReleaseCRDProxyPort", logfields.Listener, name)
 	return nil
 }
 

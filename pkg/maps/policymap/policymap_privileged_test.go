@@ -4,29 +4,51 @@
 package policymap
 
 import (
-	"log/slog"
+	"context"
 	"os"
 	"testing"
 
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/hivetest"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
 	"github.com/cilium/cilium/pkg/bpf"
+	"github.com/cilium/cilium/pkg/datapath/maps"
+	"github.com/cilium/cilium/pkg/hive"
+	"github.com/cilium/cilium/pkg/maps/registry"
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
 	policyTypes "github.com/cilium/cilium/pkg/policy/types"
 	"github.com/cilium/cilium/pkg/testutils"
 	"github.com/cilium/cilium/pkg/u8proto"
 )
 
-const (
-	testMapSize = 1024
-)
+// newTestRegistry returns a started MapRegistry with the policy maps configured
+// the way the agent does it.
+func newTestRegistry(tb testing.TB, maxEntries uint32) (*registry.MapRegistry, *StatsMap) {
+	var reg *registry.MapRegistry
+	var stats *StatsMap
+	h := hive.New(
+		registry.Cell,
+		cell.Config(PolicyConfig{
+			BpfPolicyMapMax:      int(maxEntries),
+			BpfPolicyStatsMapMax: int(maxEntries),
+		}),
+		cell.Provide(newStatsMap),
+		cell.Provide(createFactory),
+		cell.Invoke(configurePolicyMaps),
+		cell.Invoke(func(r *registry.MapRegistry, s *StatsMap) {
+			reg = r
+			stats = s
+		}),
+	)
 
-func createStatsMapForTest(maxStatsEntries int) (*StatsMap, error) {
-	m, _ := newStatsMap(maxStatsEntries, slog.Default())
-	return m, m.OpenOrCreate()
+	logger := hivetest.Logger(tb)
+	require.NoError(tb, h.Start(logger, context.TODO()))
+	tb.Cleanup(func() { require.NoError(tb, h.Stop(logger, context.TODO())) })
+
+	return reg, stats
 }
 
 func setupPolicyMapPrivilegedTestSuite(tb testing.TB) PolicyMap {
@@ -39,11 +61,18 @@ func setupPolicyMapPrivilegedTestSuite(tb testing.TB) PolicyMap {
 		tb.Fatal(err)
 	}
 
-	stats, err := createStatsMapForTest(testMapSize)
-	require.NoError(tb, err)
+	const testMapSize uint32 = 1024
+	reg, stats := newTestRegistry(tb, testMapSize)
 	require.NotNil(tb, stats)
 
-	testMap, err := newPolicyMap(logger, 0, testMapSize, stats)
+	policySpec, err := reg.Get(maps.CiliumPolicy)
+	require.NoError(tb, err)
+	require.Equal(tb, testMapSize, policySpec.MaxEntries)
+	statsSpec, err := reg.Get(maps.CiliumPolicystats)
+	require.NoError(tb, err)
+	require.Equal(tb, testMapSize, statsSpec.MaxEntries)
+
+	testMap, err := newPolicyMap(0, reg, stats)
 	require.NoError(tb, err)
 	require.NotNil(tb, testMap)
 

@@ -3,7 +3,7 @@
  */
 
 #define ENABLE_IPV4 1
-#define ENABLE_IPV6
+#define ENABLE_IPV6 1
 
 #include <bpf/ctx/skb.h>
 #include "common.h"
@@ -15,6 +15,8 @@
 #include "lib/node.h"
 #include "scapy.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_ipv6, true)
 ASSIGN_CONFIG(__u16, wg_port, 51871)
 
 /* packet defined in ./scapy/wg_from_netdev_pkt_defs.py */

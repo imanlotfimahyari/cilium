@@ -32,7 +32,7 @@ long mock_fib_lookup(__maybe_unused void *ctx, struct bpf_fib_lookup *params,
 # include "lib/bpf_host.h"
 #endif
 
-ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true })
+ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true, .dispatch_mode = DSR_DISPATCH_OPT})
 ASSIGN_CONFIG(__u32, interface_ifindex, NATIVE_IFINDEX);
 
 #include "lib/endpoint.h"
@@ -539,7 +539,6 @@ int kpr_v4_dsr_remote_node_7syn_non_dsr_check(__maybe_unused const struct __ctx_
 	test_finish();
 }
 
-#ifdef ENABLE_IPV6
 PKTGEN(PROG_TYPE, "kpr_v6_dsr_remote_node_1syn")
 int kpr_v6_dsr_remote_node_1syn_pktgen(struct __ctx_buff *ctx)
 {
@@ -989,4 +988,3 @@ int kpr_v6_dsr_remote_node_7syn_non_check(__maybe_unused const struct __ctx_buff
 
 	test_finish();
 }
-#endif /* ENABLE_IPV6 */

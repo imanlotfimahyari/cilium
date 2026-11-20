@@ -179,17 +179,13 @@ struct lb6_src_range_key {
 	union v6addr addr;
 };
 
-/* Could be read-only from datapath, but bpf_xdp_store_bytes (unlike
- * bpf_skb_store_bytes) does not accept MEM_RDONLY pointers, so map values
- * passed to ctx_store_bytes in XDP programs would be rejected by the verifier.
- */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u16);
 	__type(value, struct lb6_reverse_nat);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(max_entries, CILIUM_LB_REV_NAT_MAP_MAX_ENTRIES);
-	__uint(map_flags, CONDITIONAL_PREALLOC);
+	__uint(map_flags, CONDITIONAL_PREALLOC | BPF_F_RDONLY_PROG_COND);
 } cilium_lb6_reverse_nat __section_maps_btf;
 
 struct {
@@ -201,17 +197,13 @@ struct {
 	__uint(map_flags, CONDITIONAL_PREALLOC | BPF_F_RDONLY_PROG_COND);
 } cilium_lb6_services_v2 __section_maps_btf;
 
-/* Could be read-only from datapath, but bpf_xdp_store_bytes (unlike
- * bpf_skb_store_bytes) does not accept MEM_RDONLY pointers, so map values
- * passed to ctx_store_bytes in XDP programs would be rejected by the verifier.
- */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u32);
 	__type(value, struct lb6_backend);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(max_entries, CILIUM_LB_BACKENDS_MAP_MAX_ENTRIES);
-	__uint(map_flags, CONDITIONAL_PREALLOC);
+	__uint(map_flags, CONDITIONAL_PREALLOC | BPF_F_RDONLY_PROG_COND);
 } cilium_lb6_backends_v3 __section_maps_btf;
 
 struct {
@@ -259,17 +251,13 @@ struct {
 } cilium_lb6_maglev __section_maps_btf;
 #endif /* OVERWRITE_MAGLEV_MAP_FROM_TEST */
 
-/* Could be read-only from datapath, but bpf_xdp_store_bytes (unlike
- * bpf_skb_store_bytes) does not accept MEM_RDONLY pointers, so map values
- * passed to ctx_store_bytes in XDP programs would be rejected by the verifier.
- */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u16);
 	__type(value, struct lb4_reverse_nat);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(max_entries, CILIUM_LB_REV_NAT_MAP_MAX_ENTRIES);
-	__uint(map_flags, CONDITIONAL_PREALLOC);
+	__uint(map_flags, CONDITIONAL_PREALLOC | BPF_F_RDONLY_PROG_COND);
 } cilium_lb4_reverse_nat __section_maps_btf;
 
 struct {
@@ -281,17 +269,13 @@ struct {
 	__uint(map_flags, CONDITIONAL_PREALLOC | BPF_F_RDONLY_PROG_COND);
 } cilium_lb4_services_v2 __section_maps_btf;
 
-/* Could be read-only from datapath, but bpf_xdp_store_bytes (unlike
- * bpf_skb_store_bytes) does not accept MEM_RDONLY pointers, so map values
- * passed to ctx_store_bytes in XDP programs would be rejected by the verifier.
- */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u32);
 	__type(value, struct lb4_backend);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(max_entries, CILIUM_LB_BACKENDS_MAP_MAX_ENTRIES);
-	__uint(map_flags, CONDITIONAL_PREALLOC);
+	__uint(map_flags, CONDITIONAL_PREALLOC | BPF_F_RDONLY_PROG_COND);
 } cilium_lb4_backends_v3 __section_maps_btf;
 
 struct {
@@ -765,7 +749,6 @@ static __always_inline __u32 lb_default_algorithm(void)
 	return CONFIG(lb_default_alg);
 }
 
-#ifdef ENABLE_IPV6
 static __always_inline int
 ipv6_l4_csum_update(struct __ctx_buff *ctx, int l4_off, union v6addr *old_addr,
 		    const union v6addr *new_addr, struct csum_offset *csum_off)
@@ -987,7 +970,7 @@ bool lb6_src_range_ok(const struct lb6_service *svc __maybe_unused,
 static __always_inline bool
 lb6_to_lb4_service(const struct lb6_service *svc)
 {
-	if (!CONFIG(enable_nat_46x64))
+	if (!is_defined(ENABLE_IPV6) || !CONFIG(enable_nat_46x64))
 		return false;
 
 	return svc->flags2 & SVC_FLAG_NAT_46X64;
@@ -1029,6 +1012,9 @@ lb6_lookup_service(struct lb6_key *key, const bool east_west)
 	const struct lb6_service *svc;
 	__u16 dport;
 	__u8 proto;
+
+	if (!is_defined(ENABLE_IPV6))
+		return NULL;
 
 	key->backend_slot = 0;
 
@@ -1114,6 +1100,9 @@ lb6_lookup_wildcard_service(struct lb6_key *key)
 static __always_inline const struct lb6_backend *
 __lb6_lookup_backend(__u32 backend_id)
 {
+	if (!is_defined(ENABLE_IPV6))
+		return NULL;
+
 	return map_lookup_elem(&cilium_lb6_backends_v3, &backend_id);
 }
 
@@ -1132,6 +1121,9 @@ lb6_lookup_backend(const struct __ctx_buff *ctx __maybe_unused, __u32 backend_id
 static __always_inline const struct lb6_service *
 __lb6_lookup_backend_slot(struct lb6_key *key)
 {
+	if (!is_defined(ENABLE_IPV6))
+		return NULL;
+
 	return __lb6_lookup_service(key);
 }
 
@@ -1546,11 +1538,12 @@ static __always_inline int lb6_local(const void *map, struct __ctx_buff *ctx,
 		goto drop_err;
 	}
 
-#if DSR_ENCAP_MODE == DSR_ENCAP_NONE || DSR_ENCAP_MODE == DSR_ENCAP_GENEVE
-	if (lb6_svc_uses_dsr(svc) && need_dsr_info)
+	const bool may_need_dsr_info = (CONFIG(dsr_cfg).dispatch_mode == DSR_DISPATCH_OPT ||
+		CONFIG(dsr_cfg).dispatch_mode == DSR_DISPATCH_GENEVE) &&
+		(lb6_svc_uses_dsr(svc) && need_dsr_info);
+	if (may_need_dsr_info)
 		*need_dsr_info = lb_need_dsr_info(map, tuple, tuple->nexthdr,
 						  state, new_backend);
-#endif
 
 	/* Restore flags so that SERVICE flag is only used in used when the
 	 * service lookup happens and future lookups use EGRESS or INGRESS.
@@ -1595,37 +1588,6 @@ lb6_dnat_request(struct __ctx_buff *ctx, const struct lb6_backend *backend,
 	return lb6_xlate(ctx, &new_saddr, &saddr, tuple->nexthdr, l3_off, l4_off,
 			 &daddr, dport, backend, ipfrag_has_l4_header(fraginfo));
 }
-
-#else
-
-/* Stubs for v4-in-v6 socket cgroup hook case when only v4 is enabled to avoid
- * additional map management.
- */
-static __always_inline
-struct lb6_service *lb6_lookup_service(struct lb6_key *key __maybe_unused,
-				       const bool east_west __maybe_unused)
-{
-	return NULL;
-}
-
-static __always_inline
-struct lb6_service *__lb6_lookup_backend_slot(struct lb6_key *key __maybe_unused)
-{
-	return NULL;
-}
-
-static __always_inline struct lb6_backend *
-__lb6_lookup_backend(__u16 backend_id __maybe_unused)
-{
-	return NULL;
-}
-
-static __always_inline bool
-lb6_to_lb4_service(const struct lb6_service *svc __maybe_unused)
-{
-	return false;
-}
-#endif /* ENABLE_IPV6 */
 
 static __always_inline int __lb4_rev_nat(struct __ctx_buff *ctx, int l3_off, int l4_off,
 					 struct ipv4_ct_tuple *tuple,
@@ -2391,11 +2353,12 @@ static __always_inline int lb4_local(const void *map, struct __ctx_buff *ctx,
 		goto drop_err;
 	}
 
-#if DSR_ENCAP_MODE == DSR_ENCAP_NONE || DSR_ENCAP_MODE == DSR_ENCAP_GENEVE
-	if (lb4_svc_uses_dsr(svc) && need_dsr_info)
+	const bool may_need_dsr_info = (CONFIG(dsr_cfg).dispatch_mode == DSR_DISPATCH_OPT ||
+		CONFIG(dsr_cfg).dispatch_mode == DSR_DISPATCH_GENEVE) &&
+		(lb4_svc_uses_dsr(svc) && need_dsr_info);
+	if (may_need_dsr_info)
 		*need_dsr_info = lb_need_dsr_info(map, tuple, tuple->nexthdr,
 						  state, new_backend);
-#endif
 
 	/* Restore flags so that SERVICE flag is only used in used when the
 	 * service lookup happens and future lookups use EGRESS or INGRESS.
@@ -2468,7 +2431,6 @@ int tail_no_service_ipv4(struct __ctx_buff *ctx)
 	return ret;
 }
 
-#ifdef ENABLE_IPV6
 __declare_tail(CILIUM_CALL_IPV6_NO_SERVICE)
 int tail_no_service_ipv6(struct __ctx_buff *ctx)
 {
@@ -2505,7 +2467,6 @@ drop_err:
 
 	return ret;
 }
-#endif /* ENABLE_IPV6 */
 
 #endif /* SKIP_CALLS_MAP */
 

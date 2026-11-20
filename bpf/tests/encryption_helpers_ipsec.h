@@ -7,7 +7,7 @@
 #include "pktgen.h"
 
 #define ENABLE_IPV4 1
-#define ENABLE_IPV6
+#define ENABLE_IPV6 1
 
 /*
  * Test constants. Make sure to have a valid src/dst identity by
@@ -32,6 +32,8 @@
 #define GENERAL_PORT bpf_htons(12134)
 #define VXLAN_PORT bpf_htons(8472)
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_ipv6, true)
 ASSIGN_CONFIG(bool, enable_ipsec, true)
 
 static __always_inline

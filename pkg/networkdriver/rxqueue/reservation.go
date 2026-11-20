@@ -15,7 +15,14 @@ import (
 
 type queueReservations struct {
 	mu     lock.Mutex
-	owners map[uint32]kube_types.UID
+	queues map[uint32]*queueReservation
+	// Binding generations remain unique across individual reservation lifetimes.
+	sequence uint64
+}
+
+type queueReservation struct {
+	shareID kube_types.UID
+	binding *queueBinding // optional attachment state, including failed or revoked bindings
 }
 
 func (m *RXQueueManager) reservationsFor(ifName string) *queueReservations {
@@ -27,7 +34,7 @@ func (m *RXQueueManager) reservationsFor(ifName string) *queueReservations {
 	}
 	reservations := m.reservations[ifName]
 	if reservations == nil {
-		reservations = &queueReservations{owners: make(map[uint32]kube_types.UID)}
+		reservations = &queueReservations{queues: make(map[uint32]*queueReservation)}
 		m.reservations[ifName] = reservations
 	}
 	return reservations
@@ -54,14 +61,13 @@ func (d *RXQueueDevice) reserve(allocation types.DeviceAllocation, candidates []
 
 	d.reservations.mu.Lock()
 	defer d.reservations.mu.Unlock()
-	if d.reservations.owners == nil {
-		d.reservations.owners = make(map[uint32]kube_types.UID)
+	if d.reservations.queues == nil {
+		d.reservations.queues = make(map[uint32]*queueReservation)
 	}
 
 	for _, queueID := range candidates {
-		owner, reserved := d.reservations.owners[queueID]
-		if reserved {
-			if owner == allocation.ShareID {
+		if reservation := d.reservations.queues[queueID]; reservation != nil {
+			if reservation.shareID == allocation.ShareID {
 				return d.preparedForAllocation(allocation.ShareID, podIfName, queueID), nil
 			}
 			continue
@@ -74,8 +80,13 @@ func (d *RXQueueDevice) reserve(allocation types.DeviceAllocation, candidates []
 		if queue.Lease != nil {
 			continue
 		}
+		// Clear any steering rules targeting this queue before allocating it.
+		// Old rules may remain if cilium-agent stopped before completing cleanup.
+		if err := syncRXFlows(d.PhysicalIfName, queueID, nil); err != nil {
+			return nil, fmt.Errorf("failed to clear RX flow rules for %s/%d: %w", d.PhysicalIfName, queueID, err)
+		}
 
-		d.reservations.owners[queueID] = allocation.ShareID
+		d.reservations.queues[queueID] = &queueReservation{shareID: allocation.ShareID}
 		return d.preparedForAllocation(allocation.ShareID, podIfName, queueID), nil
 	}
 
@@ -95,25 +106,41 @@ func (d *RXQueueDevice) restoreReservation() error {
 
 	d.reservations.mu.Lock()
 	defer d.reservations.mu.Unlock()
-	if d.reservations.owners == nil {
-		d.reservations.owners = make(map[uint32]kube_types.UID)
+	if d.reservations.queues == nil {
+		d.reservations.queues = make(map[uint32]*queueReservation)
 	}
-	if owner, exists := d.reservations.owners[d.PhysicalQueueID]; exists && owner != d.ShareID {
-		return fmt.Errorf("%w: RX queue %s/%d is already reserved", errInvalidAllocation, d.PhysicalIfName, d.PhysicalQueueID)
+	if reservation := d.reservations.queues[d.PhysicalQueueID]; reservation != nil {
+		if reservation.shareID != d.ShareID {
+			return fmt.Errorf("%w: RX queue %s/%d is already reserved", errInvalidAllocation, d.PhysicalIfName, d.PhysicalQueueID)
+		}
+		return nil
 	}
-	d.reservations.owners[d.PhysicalQueueID] = d.ShareID
+	d.reservations.queues[d.PhysicalQueueID] = &queueReservation{shareID: d.ShareID}
 	return nil
 }
 
-func (d *RXQueueDevice) releaseReservation() {
+// releaseReservation removes the rules that target the queue and returns it to
+// the reserved pool. Both happen under the reservation lock, so no flow update
+// can program the queue in between.
+func (d *RXQueueDevice) releaseReservation() error {
 	if d.reservations == nil {
-		return
+		return nil
 	}
 	d.reservations.mu.Lock()
 	defer d.reservations.mu.Unlock()
-	if d.reservations.owners[d.PhysicalQueueID] == d.ShareID {
-		delete(d.reservations.owners, d.PhysicalQueueID)
+	reservation := d.reservations.queues[d.PhysicalQueueID]
+	if reservation == nil || reservation.shareID != d.ShareID {
+		return nil
 	}
+	if binding := reservation.binding; binding != nil {
+		binding.Generation = 0
+		binding.retired[binding.AttachmentID] = struct{}{}
+	}
+	if err := syncRXFlows(d.PhysicalIfName, d.PhysicalQueueID, nil); err != nil {
+		return fmt.Errorf("failed to remove RX flow rules for %s/%d: %w", d.PhysicalIfName, d.PhysicalQueueID, err)
+	}
+	delete(d.reservations.queues, d.PhysicalQueueID)
+	return nil
 }
 
 func (d *RXQueueDevice) preparedForAllocation(shareID kube_types.UID, podIfName string, physicalQueueID uint32) *RXQueueDevice {
@@ -138,6 +165,7 @@ func (d *RXQueueDevice) clone() *RXQueueDevice {
 		PodIfName:        d.PodIfName,
 		PhysicalQueueID:  d.PhysicalQueueID,
 		VirtualQueueID:   d.VirtualQueueID,
+		Binding:          d.Binding.clone(),
 		reservations:     d.reservations,
 	}
 }

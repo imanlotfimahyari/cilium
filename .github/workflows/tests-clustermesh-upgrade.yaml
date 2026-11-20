@@ -209,6 +209,11 @@ jobs:
           # * We explicitly configure the sync timeout to a higher value to
           #   give enough time to the clustermesh-apiserver to restart after
           #   the upgrade/downgrade before that agents regenerate the endpoints.
+          # * We explicitly configure the timeouts of the operations that wait for the
+          #   clustermesh synchronization (policy restoration of the endpoints for Envoy,
+          #   load-balancing initialization) to match the sync timeout, so that they
+          #   don't expire first, logging a warning, while the clustermesh-apiserver is
+          #   still unavailable or restoring (e.g., in the stress test below).
           # * We configure the maximum number of unavailable agents to 1 to slow
           #   down the rollout process and highlight possible connection disruption
           #   occurring in the meanwhile.
@@ -230,7 +235,8 @@ jobs:
             --set=clustermesh.maxConnectedClusters=${{ matrix.max-connected-clusters }} \
             --set=clustermesh.config.enabled=true \
             --set=extraConfig.clustermesh-sync-timeout=10m \
-            --set=extraConfig.lb-init-wait-timeout=4m \
+            --set=extraConfig.lb-init-wait-timeout=10m \
+            --set=extraConfig.envoy-policy-restore-timeout=10m \
             --set=clustermesh.apiserver.readinessProbe.periodSeconds=1 \
             --set=clustermesh.apiserver.kvstoremesh.readinessProbe.periodSeconds=1 \
             --set=clustermesh.apiserver.updateStrategy.rollingUpdate.maxSurge=1 `# Use surge update strategy to enable clients to failover` \
@@ -285,7 +291,7 @@ jobs:
           sudo sysctl -w fs.inotify.max_user_instances=1280 fs.inotify.max_user_watches=655360
 
       - name: Create Kind cluster 1
-        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: ${{ env.clusterName1 }}
           version: ${{ env.KIND_VERSION }}
@@ -295,7 +301,7 @@ jobs:
           wait: 0 # The control-plane never becomes ready, since no CNI is present
 
       - name: Create Kind cluster 2
-        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: ${{ env.clusterName2 }}
           version: ${{ env.KIND_VERSION }}
@@ -316,7 +322,7 @@ jobs:
           done
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@d9302835ae0d3cb6148178d4590240622289e193 # v0.20.1
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -462,7 +468,7 @@ jobs:
 
       - name: Login to docker registry for image wait
         if: ${{ vars.DOCKER_AUTH_REQUIRED == 'true' }}
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ vars.DOCKER_READ_HOST }}
           username: ${{ vars.DOCKER_READ_USERNAME }}

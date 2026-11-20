@@ -30,9 +30,12 @@ import (
 
 	"github.com/cilium/cilium/pkg/datapath/connector"
 	"github.com/cilium/cilium/pkg/datapath/xdp"
+	"github.com/cilium/cilium/pkg/endpointstate"
 	"github.com/cilium/cilium/pkg/ipam"
+	ipamoption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	"github.com/cilium/cilium/pkg/k8s/resource"
+	k8sTables "github.com/cilium/cilium/pkg/k8s/tables"
 	"github.com/cilium/cilium/pkg/k8s/version"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -40,6 +43,7 @@ import (
 	"github.com/cilium/cilium/pkg/networkdriver/types"
 	"github.com/cilium/cilium/pkg/node"
 	nodetypes "github.com/cilium/cilium/pkg/node/types"
+	"github.com/cilium/cilium/pkg/promise"
 	ciliumslices "github.com/cilium/cilium/pkg/slices"
 	"github.com/cilium/cilium/pkg/time"
 )
@@ -78,13 +82,13 @@ type Driver struct {
 	config    *v2alpha1.CiliumNetworkDriverNodeConfigSpec
 
 	deviceManagers map[types.DeviceManagerType]types.DeviceManager
-	// pod.UID: network namespace path. Captured at RunPodSandbox (and rebuilt on
+	// Sandbox ID: network namespace path. Captured at RunPodSandbox (and rebuilt on
 	// plugin (re)connect via Synchronize) so StopPodSandbox can recover the netns on
 	// containerd < 2.1, where the stop event carries no namespaces: the sandbox task
 	// is already killed, so the NRI PodSandbox spec comes back empty. containerd
 	// removes the netns only after the StopPodSandbox hook returns, so the cached
 	// path is still valid when we use it. Guarded by lock.
-	podNetns map[kube_types.UID]string
+	podNetns map[string]string
 
 	db              *statedb.DB
 	deviceTable     statedb.RWTable[*DRADevice]
@@ -95,8 +99,19 @@ type Driver struct {
 	multiPoolMgr *ipam.MultiPoolManager
 	ipv4Enabled  bool
 	ipv6Enabled  bool
+	ipamMode     string
 
 	configModifiers []claimConfigModifier
+
+	// RX queue flow steering is derived from these tables.
+	rxQueueFlows statedb.RWTable[*RXQueueFlows]
+	localPods    statedb.Table[k8sTables.LocalPod]
+
+	endpoints        rxQueueEndpointLookup
+	endpointRestorer promise.Promise[endpointstate.Restorer]
+	// rxQueueBindLock serializes binding with address release. Take it after
+	// driver.lock or the IPAM allocation mutex, never before either.
+	rxQueueBindLock lock.Mutex
 }
 
 type allocation struct {
@@ -235,7 +250,7 @@ func (driver *Driver) Start(ctx cell.HookContext) error {
 		}
 		driver.setConfig(&cfg)
 
-		if err := validateRXQueueDatapath(driver.config.DeviceManagerConfigs, driver.datapathMode, driver.xdpMode); err != nil {
+		if err := validateRXQueueDatapath(driver.config.DeviceManagerConfigs, driver.datapathMode, driver.xdpMode, driver.ipamMode); err != nil {
 			return err
 		}
 
@@ -314,6 +329,15 @@ func (driver *Driver) Start(ctx cell.HookContext) error {
 		}
 
 		driver.logger.DebugContext(ctx, "device and allocation tables initialized")
+		if _, enabled := driver.deviceManagers[types.DeviceManagerTypeRXQueue]; enabled {
+			restorer, err := driver.endpointRestorer.Await(ctx)
+			if err != nil {
+				return err
+			}
+			if err := restorer.WaitForEndpointRestoreWithoutRegeneration(ctx); err != nil {
+				return err
+			}
+		}
 
 		if err := driver.startDRA(ctx); err != nil {
 			driver.Stop(ctx)
@@ -323,6 +347,13 @@ func (driver *Driver) Start(ctx cell.HookContext) error {
 		if err := driver.startNRI(ctx); err != nil {
 			driver.Stop(ctx)
 			return err
+		}
+
+		if _, enabled := driver.deviceManagers[types.DeviceManagerTypeRXQueue]; enabled {
+			driver.jg.Add(job.OneShot(
+				"network-driver-rx-queue-flows",
+				driver.runRXQueueFlowController,
+			))
 		}
 
 		// Publish loop: re-publish ResourceSlices whenever inventory or
@@ -414,12 +445,13 @@ func (driver *Driver) validateConsumableCapacityVersion(k8sVersion semver.Versio
 	return nil
 }
 
-// validateRXQueueDatapath rejects datapath settings that cannot coexist
+// validateRXQueueDatapath rejects agent settings that cannot coexist
 // with RX queue leasing.
 func validateRXQueueDatapath(
 	configs *v2alpha1.CiliumNetworkDriverDeviceManagerConfig,
 	mode connector.Mode,
 	xdpMode xdp.AccelerationMode,
+	ipamMode string,
 ) error {
 	if configs == nil || configs.RXQueue == nil || !configs.RXQueue.Enabled {
 		return nil
@@ -438,6 +470,9 @@ func validateRXQueueDatapath(
 			"RX queue device manager is incompatible with XDP acceleration mode %q",
 			xdpMode,
 		)
+	}
+	if ipamMode != ipamoption.IPAMKubernetes && ipamMode != ipamoption.IPAMClusterPool {
+		return fmt.Errorf("RX queue device manager requires kubernetes or cluster-pool IPAM, got %q", ipamMode)
 	}
 	return nil
 }
@@ -617,8 +652,7 @@ func (driver *Driver) setConfig(config *v2alpha1.CiliumNetworkDriverNodeConfigSp
 	})
 }
 
-// updateAllocationDevice replaces a prepared device that NRI recovered on
-// demand after a reboot.
+// updateAllocationDevice publishes an updated prepared-device snapshot from NRI.
 func (driver *Driver) updateAllocationDevice(a allocation) {
 	if a.Device == nil || a.DeviceName == "" {
 		return

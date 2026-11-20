@@ -33,6 +33,9 @@ func NodeConfig(lnc *Config) Node {
 		CloseTimeout:             uint32(option.Config.CTMapEntriesTimeoutFIN.Seconds()),
 	}
 
+	node.EnableIPv4 = lnc.EnableIPv4
+	node.EnableIPv6 = lnc.EnableIPv6
+
 	if lnc.ServiceLoopbackIPv4.IsValid() {
 		node.ServiceLoopbackIPv4.Addr = lnc.ServiceLoopbackIPv4.As4()
 	}
@@ -198,8 +201,22 @@ func NodeConfig(lnc *Config) Node {
 		EnableByUser:     lnc.LBConfig.DSRConfig.EnableByUser,
 	}
 
+	if lnc.KPRConfig.KubeProxyReplacement && lnc.LBConfig.LoadBalancerUsesDSR() {
+		switch lnc.LBConfig.DSRDispatch {
+		case loadbalancer.DSRDispatchOption:
+			node.DSRCfg.DispatchMode = types.DSRDispatchModeDSRDispatchOpt
+		case loadbalancer.DSRDispatchIPIP:
+			node.DSRCfg.DispatchMode = types.DSRDispatchModeDSRDispatchIPIP
+		case loadbalancer.DSRDispatchGeneve:
+			node.DSRCfg.DispatchMode = types.DSRDispatchModeDSRDispatchGeneve
+		default:
+			node.DSRCfg.DispatchMode = types.DSRDispatchModeDSRDispatchInvalid
+		}
+	}
+
 	node.EnableIPSec = lnc.EnableIPSec
 	node.EnableWireguard = lnc.EnableWireguard
+	node.EnableBandwidthManager = lnc.EnableBandwidthManager
 
 	node.EnableL7LB = option.Config.EnableEnvoyConfig
 

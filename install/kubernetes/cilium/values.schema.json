@@ -4782,6 +4782,9 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "installCRDs": {
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -6113,6 +6116,27 @@
     },
     "rbac": {
       "properties": {
+        "admissionPolicies": {
+          "properties": {
+            "agent": {
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            "preflight": {
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
         "create": {
           "type": "boolean"
         }

@@ -38,6 +38,8 @@ type Node struct {
 	DirectRoutingDevIfIndex uint32 `config:"direct_routing_dev_ifindex"`
 	// Enable BPF Host Routing.
 	EnableBPFHostRouting bool `config:"enable_bpf_host_routing"`
+	// Enable bandwidth manager.
+	EnableBandwidthManager bool `config:"enable_bandwidth_manager"`
 	// Enable per flow (conntrack) statistics.
 	EnableConntrackAccounting bool `config:"enable_conntrack_accounting"`
 	// Enable drop notifications.
@@ -55,6 +57,10 @@ type Node struct {
 	EnableIPMasqAgentIPv6 bool `config:"enable_ip_masq_agent_ipv6"`
 	// Enable IPSec support.
 	EnableIPSec bool `config:"enable_ipsec"`
+	// Enable IPv4 support.
+	EnableIPv4 bool `config:"enable_ipv4"`
+	// Enable IPv6 support.
+	EnableIPv6 bool `config:"enable_ipv6"`
 	// Enable setting identity mark for local traffic.
 	EnableIdentityMark bool `config:"enable_identity_mark"`
 	// Use jiffies (count of timer ticks since boot).
@@ -156,11 +162,12 @@ func NewNode() *Node {
 		cast[types.MACAddr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		0x0,
 		cast[types.MACAddr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
-		0x0, 0x8, cast[types.DSRConfig]([]byte{0x0, 0x0, 0x0}), false,
-		false, false, 0x0, false, false, false, false, false, false,
+		0x0, 0x8,
+		cast[types.DSRConfig]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
+		false, false, false, 0x0, false, false, false, false, false,
 		false, false, false, false, false, false, false, false, false,
-		false, false, false, false, false, false, 0x0, 0x0, false,
-		0x0, 0x0, 0x0, 0x0, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
+		false, false, false, false, false, false, false, false, false,
+		false, 0x0, 0x0, false, 0x0, 0x0, 0x0, 0x0, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.IPv4SNATExclusionPrefix]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),

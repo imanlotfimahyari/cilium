@@ -163,9 +163,7 @@ var (
 	}
 
 	ExpectedXFRMErrors = []string{
-		"inbound_forward_header", // XfrmFwdHdrError
-		"inbound_other",          // XfrmInError
-		"inbound_state_invalid",  // XfrmInStateInvalid
+		"inbound_state_invalid", // XfrmInStateInvalid
 	}
 
 	LogCodeOwners  = false
@@ -186,7 +184,7 @@ var (
 		// renovate: datasource=docker
 		"ConnectivityTestFRRImage": "quay.io/frrouting/frr:10.7.1@sha256:e995beaa50fdc9edb35eadcfefa29b7f062cc06f2b812613789b68fa541554d2",
 		// renovate: datasource=docker
-		"ConnectivityTestSocatImage": "docker.io/alpine/socat:1.8.1.3@sha256:466c8a0383e16463fabdb7df01008292fb78d07da60224a46cb5d3142ce122ed",
+		"ConnectivityTestSocatImage": "docker.io/alpine/socat:1.8.1.3@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba",
 	}
 
 	ConnectivityCheckOptionalImagesTest = map[string]string{

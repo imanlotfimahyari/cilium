@@ -71,7 +71,7 @@ env:
   # capacity since GCE does not report it.
   gcp_zone: us-central1-a
   # renovate: datasource=docker depName=google/cloud-sdk
-  gcloud_version: 591.0.0
+  gcloud_version: 593.0.0
 
 jobs:
   echo-inputs:
@@ -257,6 +257,21 @@ jobs:
         with:
           version: ${{ env.gcloud_version }}
 
+      - name: Fetch a gcloud access token
+        # gcloud caches the token for the commands below, so a failed token exchange is retried here.
+        run: |
+          for i in 1 2 3; do
+            if timeout 30 gcloud auth print-access-token > /dev/null; then
+              exit 0
+            fi
+            if [ "${i}" -lt 3 ]; then
+              echo "::warning::gcloud could not fetch an access token (attempt ${i}/3), retrying in 5s"
+              sleep 5
+            fi
+          done
+          echo "::error::gcloud could not fetch an access token after 3 attempts"
+          exit 1
+
       - name: Install gke-gcloud-auth-plugin
         run: |
           gcloud components install gke-gcloud-auth-plugin
@@ -317,7 +332,7 @@ jobs:
             --docker-password="${{ secrets.DOCKER_READ_PASSWORD }}"
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@d9302835ae0d3cb6148178d4590240622289e193 # v0.20.1
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -399,7 +414,7 @@ jobs:
 
       - name: Export results and sysdump to GS bucket
         if: ${{ always() && steps.run-perf.outcome != 'skipped' && steps.run-perf.outcome != 'cancelled' }}
-        uses: cilium/scale-tests-action/export-results@529d919e01deb35642ba5c6ecdcbf2e2311cd3de # main
+        uses: cilium/scale-tests-action/export-results@da97301b3cf2f913d476eca7a13a260f72856fa2 # main
         with:
           test_name: ${{ env.test_name }}-${{ matrix.name }}
           tested_sha: ${{ inputs.SHA || github.sha }}

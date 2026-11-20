@@ -99,12 +99,23 @@ func TestFCFSModeSyncCESsInLocalCacheDefault(t *testing.T) {
 	ces2 := tu.CreateStoreEndpointSlice("ces2", "ns", []cilium_v2a1.CoreCiliumEndpoint{cep5, cep6, cep7})
 	cesStore.CacheStore().Add(ces2)
 
+	// cep8 was recreated with a new UID while ces3 still records the old one.
+	cep8 := tu.CreateManagerEndpoint("cep8", 1, "node1")
+	ces3 := tu.CreateStoreEndpointSlice("ces3", "ns", []cilium_v2a1.CoreCiliumEndpoint{cep8})
+	cesStore.CacheStore().Add(ces3)
+	recreatedCEP8 := tu.CreateStoreEndpoint("cep8", "ns", 1)
+	recreatedCEP8.OwnerReferences[0].UID = "cep8-new-uid"
+	cepStore.CacheStore().Add(recreatedCEP8)
+
 	// Subscribe after seeding so the replay picks up the objects we injected.
 	cepEvents := ciliumEndpoint.Events(t.Context())
 	cesEvents := ciliumEndpointSlice.Events(t.Context())
 	cesController.syncCESsInLocalCache(cepEvents, cesEvents)
 
 	mapping := m.mapping
+
+	// ces2 (stale cep7) and ces3 (stale cep8) must be enqueued for pruning.
+	assertEnqueued(t, cesController.Controller, NewCESKey("ces2", "ns"), NewCESKey("ces3", "ns"))
 
 	for _, ces := range []*cilium_v2a1.CiliumEndpointSlice{ces1, ces2} {
 		for _, cep := range ces.Endpoints {
@@ -121,6 +132,22 @@ func TestFCFSModeSyncCESsInLocalCacheDefault(t *testing.T) {
 
 	cesController.queue.ShutDown()
 	hive.Stop(log, t.Context())
+}
+
+// assertEnqueued waits until all the given keys are queued.
+// Note: keys are drained from the queue, as nothing else consumes it in tests.
+func assertEnqueued(t *testing.T, c *Controller, want ...CESKey) {
+	t.Helper()
+
+	var got []CESKey
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for c.queue.Len() > 0 {
+			key, _, _ := c.queue.GetWithPriority()
+			c.queue.Done(key)
+			got = append(got, key)
+		}
+		assert.Subset(ct, got, want)
+	}, time.Second, 10*time.Millisecond)
 }
 
 func queueLengths(t *testing.T, c *Controller) (standardQueueLen, fastQueueLen int) {
@@ -798,6 +825,9 @@ func TestSyncCESsInLocalCacheOperatorDowntime(t *testing.T) {
 	// pod8 exists in the Pod store but no CES lists it yet — simulating a
 	// pod that was created while the operator was down.
 	pod8 := cidtest.NewPod("pod8", "ns", tu.TestLbsB, "node1")
+	// pod9 was recreated with a new UID while ces3 still records the old one.
+	pod9 := cidtest.NewPod("pod9", "ns", tu.TestLbsB, "node1")
+	pod9.UID = "pod9-new-uid"
 	podStore.CacheStore().Add(pod1)
 	podStore.CacheStore().Add(pod2)
 	podStore.CacheStore().Add(pod3)
@@ -806,6 +836,7 @@ func TestSyncCESsInLocalCacheOperatorDowntime(t *testing.T) {
 	podStore.CacheStore().Add(pod6)
 	// pod7 is intentionally NOT added to the Pod store.
 	podStore.CacheStore().Add(pod8)
+	podStore.CacheStore().Add(pod9)
 
 	cid1 := cidtest.NewCIDWithNamespace("1", pod1, ns)
 	cid2 := cidtest.NewCIDWithNamespace("2", pod3, ns)
@@ -823,6 +854,9 @@ func TestSyncCESsInLocalCacheOperatorDowntime(t *testing.T) {
 	cep7 := tu.CreateManagerEndpoint("pod7", 2, "node1")
 	ces2 := tu.CreateStoreEndpointSlice("ces2", "ns", []cilium_v2a1.CoreCiliumEndpoint{cep5, cep6, cep7})
 	cesStore.CacheStore().Add(ces2)
+	cep9 := tu.CreateManagerEndpoint("pod9", 2, "node1")
+	ces3 := tu.CreateStoreEndpointSlice("ces3", "ns", []cilium_v2a1.CoreCiliumEndpoint{cep9})
+	cesStore.CacheStore().Add(ces3)
 
 	// Delete CID1 to simulate the scenario where a CID was deleted while
 	// the operator was down.
@@ -842,17 +876,15 @@ func TestSyncCESsInLocalCacheOperatorDowntime(t *testing.T) {
 	// pod8 (added while down) was placed in some CES via phase 5's
 	// onPodUpdate — either into an existing CES with capacity or a fresh
 	// one if none had room.
-	_, ok := m.mapping.getCESName(NewCEPName("pod8", "ns"))
+	cesName8, ok := m.mapping.getCESName(NewCEPName("pod8", "ns"))
 	assert.True(t, ok, "pod8 should be placed in a CES")
 
 	// Some CES(es) should have been enqueued for reconciliation:
 	// - ces2 because pod7 was skipped as stale.
 	// - the CES that received pod8 (via onPodUpdate's enqueue).
-	if err := testutils.WaitUntil(func() bool {
-		return cesController.queue.Len() >= 1
-	}, time.Second); err != nil {
-		t.Fatalf("expected CES(es) to be enqueued after bootstrap; queues empty")
-	}
+	// - ces3 because pod9 was recreated with a new UID.
+	assertEnqueued(t, cesController.Controller,
+		NewCESKey("ces2", "ns"), NewCESKey(string(cesName8), "ns"), NewCESKey("ces3", "ns"))
 
 	// Calling onPodUpdate again is idempotent for already-placed pods.
 	cesController.onPodUpdate(pod1)

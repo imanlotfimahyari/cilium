@@ -393,10 +393,28 @@ func (c *DNSCache) UpdateFromCache(update *DNSCache) {
 	}
 }
 
+// sortedIPNames is a snapshot of IP-to-name mappings whose name slices are sorted.
+// Keep the sorting here so callers can only search through a sorted snapshot.
+type sortedIPNames struct {
+	byIP map[netip.Addr][]string
+}
+
+func newSortedIPNames(byIP map[netip.Addr][]string) sortedIPNames {
+	for _, names := range byIP {
+		slices.Sort(names)
+	}
+	return sortedIPNames{byIP: byIP}
+}
+
+func (s sortedIPNames) contains(ip netip.Addr, name string) bool {
+	_, found := slices.BinarySearch(s.byIP[ip], name)
+	return found
+}
+
 // partialRestoreFromCache is a utility function that upserts the entries of one DNSCache into another.
 // It takes a set of existing entries to ensure that it will only upsert IPs and IP->name mappings that is
 // part of that mapping.
-func (c *DNSCache) partialRestoreFromCache(update *DNSCache, namesToUpdate []string, oldEntries map[netip.Addr][]string) {
+func (c *DNSCache) partialRestoreFromCache(update *DNSCache, namesToUpdate []string, oldEntries sortedIPNames) {
 	update.mu.RLock()
 	defer update.mu.RUnlock()
 
@@ -408,7 +426,7 @@ func (c *DNSCache) partialRestoreFromCache(update *DNSCache, namesToUpdate []str
 		for _, newEntry := range newEntries {
 			newIps := make([]netip.Addr, 0, len(newEntry.IPs))
 			for _, ip := range newEntry.IPs {
-				if names, found := oldEntries[ip]; found && slices.Contains(names, newEntry.Name) {
+				if oldEntries.contains(ip, newEntry.Name) {
 					newIps = append(newIps, ip)
 				}
 			}
@@ -446,7 +464,7 @@ func (c *DNSCache) ReplaceFromCacheByNames(namesToUpdate []string, updates ...*D
 
 	// Dump the existing IP->[names...] mapping that can be used to decide
 	// what information should be restored from the local caches.
-	oldEntries := c.getIPsLocked()
+	oldEntries := newSortedIPNames(c.getIPsLocked())
 
 	// Remove any DNS name in namesToUpdate with a lookup before "now". This
 	// effectively deletes all lookups because we're holding the lock.
@@ -457,7 +475,7 @@ func (c *DNSCache) ReplaceFromCacheByNames(namesToUpdate []string, updates ...*D
 	}
 
 	c.updated.Clear()
-	return oldEntries
+	return oldEntries.byIP
 }
 
 // Lookup returns a set of unique IPs that are currently unexpired for name, if
@@ -894,15 +912,12 @@ func (n *nameSet) Insert(names ...string) {
 
 func (n nameSet) Delete(names ...string) { sets.Set[string](n).Delete(names...) }
 
-// Sorted returns the names as a sorted slice. A set has no iteration order, so
-// sort wherever the order is observable, and identical state then produces
-// identical output.
-func (n nameSet) Sorted() []string { return sets.List(sets.Set[string](n)) }
-
-// MarshalJSON encodes the set as a sorted array. The receiver is a value, so
+// MarshalJSON encodes the set as an array. The receiver is a value, so
 // encoding/json finds it however the enclosing zombie is passed -- by pointer,
 // by value, or as a map element.
-func (n nameSet) MarshalJSON() ([]byte, error) { return json.Marshal(n.Sorted()) }
+func (n nameSet) MarshalJSON() ([]byte, error) {
+	return json.Marshal(sets.Set[string](n).UnsortedList())
+}
 
 // UnmarshalJSON decodes the array form back into a set. Restored names are not
 // trusted to be unique; loading them into a set de-duplicates them.

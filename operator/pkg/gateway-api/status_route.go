@@ -44,6 +44,7 @@ type RouteStatusManager struct {
 	includeUDPRoutes        bool
 	tcpUDPRouteSupport      bool
 	tcpUDPUnsupportedReason string
+	backendValidator        routechecks.BackendValidator
 }
 
 type RouteStatusInputs struct {
@@ -56,6 +57,7 @@ type RouteStatusInputs struct {
 }
 
 type RouteStatusManagerConfig struct {
+	BackendValidator        routechecks.BackendValidator
 	IncludeTCPRoutes        bool
 	IncludeUDPRoutes        bool
 	TCPUDPRouteSupport      bool
@@ -71,6 +73,7 @@ func NewRouteStatusManager(client client.Client, logger *slog.Logger, controller
 		includeUDPRoutes:        cfg.IncludeUDPRoutes,
 		tcpUDPRouteSupport:      cfg.TCPUDPRouteSupport,
 		tcpUDPUnsupportedReason: cfg.TCPUDPUnsupportedReason,
+		backendValidator:        cfg.BackendValidator,
 	}
 }
 
@@ -102,6 +105,9 @@ func (m *RouteStatusManager) SetRouteStatuses(ctx context.Context, scopedLog *sl
 //
 // Uses the helpers.Input interface to ensure that this still applies as new types are added.
 func (m *RouteStatusManager) runCommonRouteChecks(ctx context.Context, input routechecks.Input, parentRefs []gatewayv1.ParentReference, objNamespace string) error {
+	if m.backendValidator != nil {
+		input = backendValidatorInput{Input: input, validator: m.backendValidator}
+	}
 	for _, parent := range parentRefs {
 		if helpers.IsGateway(parent) {
 			if err := m.runGatewayRouteChecks(ctx, input, parent, objNamespace); err != nil {
@@ -119,8 +125,8 @@ func (m *RouteStatusManager) runCommonRouteChecks(ctx context.Context, input rou
 
 // checkRouteSupported returns false when route validation should stop for this input.
 func (m *RouteStatusManager) checkRouteSupported(input routechecks.Input, parent gatewayv1.ParentReference) bool {
-	switch k := input.GetGVK().Kind; k {
-	case kindTCPRoute, kindUDPRoute:
+	switch k := input.GetGVK().Kind; gatewayv1.Kind(k) {
+	case helpers.KindTCPRoute, helpers.KindUDPRoute:
 		if !m.tcpUDPRouteSupport {
 			input.SetParentCondition(parent, metav1.Condition{
 				Type:    string(gatewayv1.RouteConditionAccepted),
@@ -479,3 +485,11 @@ func (m *RouteStatusManager) updateGRPCRouteStatus(ctx context.Context, scopedLo
 	scopedLog.Debug("Updating GRPCRoute status", grpcRoute, types.NamespacedName{Name: original.Name, Namespace: original.Namespace})
 	return m.client.Status().Update(ctx, new)
 }
+
+// Keep the base Input interface unchanged for controllers without extensions.
+type backendValidatorInput struct {
+	routechecks.Input
+	validator routechecks.BackendValidator
+}
+
+func (i backendValidatorInput) BackendValidator() routechecks.BackendValidator { return i.validator }

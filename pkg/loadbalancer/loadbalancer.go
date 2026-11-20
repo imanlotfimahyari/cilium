@@ -19,7 +19,6 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/cilium/statedb/index"
 	"github.com/cilium/statedb/part"
-	"go.yaml.in/yaml/v3"
 
 	"github.com/cilium/cilium/api/v1/models"
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
@@ -719,8 +718,8 @@ func (n ServiceName) MarshalYAML() (any, error) {
 	return n.String(), nil
 }
 
-func (n *ServiceName) UnmarshalYAML(value *yaml.Node) error {
-	return n.unmarshalString(value.Value)
+func (n *ServiceName) UnmarshalText(text []byte) error {
+	return n.unmarshalString(string(text))
 }
 
 func (n *ServiceName) Equal(other ServiceName) bool {
@@ -1225,8 +1224,8 @@ func (l L3n4Addr) MarshalYAML() (any, error) {
 	return l.StringWithProtocol(), nil
 }
 
-func (l *L3n4Addr) UnmarshalYAML(value *yaml.Node) error {
-	return l.ParseFromString(value.Value)
+func (l *L3n4Addr) UnmarshalText(text []byte) error {
+	return l.ParseFromString(string(text))
 }
 
 func (l L3n4Addr) MarshalJSON() ([]byte, error) {

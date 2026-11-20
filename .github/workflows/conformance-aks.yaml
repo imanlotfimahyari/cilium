@@ -105,7 +105,7 @@ concurrency:
 env:
   name: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}-${{ inputs.UID }}-${{ github.run_attempt }}
   cost_reduction: --node-vm-size Standard_B2s --node-osdisk-size 64
-  create_timeout_minutes: 54
+  create_timeout_minutes: 60
   ipv4_pod_cidr: 192.168.0.0/16
   ipv6_pod_cidr: fd00::/104
   test_concurrency: 5
@@ -422,7 +422,7 @@ jobs:
             --docker-password="${{ secrets.DOCKER_READ_PASSWORD }}"
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@d9302835ae0d3cb6148178d4590240622289e193 # v0.20.1
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
