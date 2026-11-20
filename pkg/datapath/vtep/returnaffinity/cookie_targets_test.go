@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
+// This file was not reviewed by a human before submission
+
 package returnaffinity
 
 import (
@@ -13,12 +15,65 @@ import (
 
 func TestCookieTimingRequiresExactKernelConfiguration(t *testing.T) {
 	for _, config := range []string{"", "CONFIG_HZ=100", "CONFIG_HZ=250", "CONFIG_HZ=1000\nCONFIG_HZ=1000", "CONFIG_HZ=1000x", "# CONFIG_HZ=1000", strings.Repeat("x", (1<<20)+1)} {
-		if requireCookieHZ(strings.NewReader(config)) == nil {
+		if requireCookieHZ(strings.NewReader(config), 1000) == nil {
 			t.Fatal("accepted absent, ambiguous, unreviewed or oversized kernel timing")
 		}
 	}
-	if err := requireCookieHZ(strings.NewReader("# public test configuration\nCONFIG_HZ=1000\nCONFIG_NET=y\n")); err != nil {
+	if err := requireCookieHZ(strings.NewReader("# public test configuration\nCONFIG_HZ=1000\nCONFIG_NET=y\n"), 1000); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCookieAL2023ProfileRequiresExactReleaseArchitectureAndTiming(t *testing.T) {
+	const release = "6.12.115-140.210.amzn2023.x86_64"
+	for _, candidate := range []struct {
+		release, machine string
+		expected         int
+	}{
+		{release, "x86_64", 100},
+		{"6.8.0-31-generic", "x86_64", 1000},
+		{"6.12.0-061200-generic", "x86_64", 1000},
+		{release, "aarch64", 0},
+		{release + "-debug", "x86_64", 0},
+		{"6.12.115-140.211.amzn2023.x86_64", "x86_64", 0},
+	} {
+		hz, err := reviewedCookieKernelHZ(candidate.release, candidate.machine)
+		if hz != candidate.expected || (err == nil) != (hz != 0) {
+			t.Fatalf("unexpected kernel profile for %v: %d, %v", candidate, hz, err)
+		}
+	}
+	if err := requireCookieHZ(strings.NewReader("CONFIG_HZ_100=y\nCONFIG_HZ=100\n"), 100); err != nil {
+		t.Fatal(err)
+	}
+	for _, config := range []string{"CONFIG_HZ=1000", "CONFIG_HZ=100\nCONFIG_HZ=100", "CONFIG_HZ=100x"} {
+		if err := requireCookieHZ(strings.NewReader(config), 100); err == nil {
+			t.Fatalf("accepted ambiguous or mismatched AL2023 kernel config: %q", config)
+		}
+	}
+}
+
+func TestCookieProducerSelectionKeepsOneLogicalHook(t *testing.T) {
+	for period, expected := range map[uint64]string{60000: "ck_synack_created", 6000: "ck_synack_hz100"} {
+		spec := &ebpf.CollectionSpec{Programs: map[string]*ebpf.ProgramSpec{
+			"ck_synack_created": {Name: "ck_synack_created"},
+			"ck_synack_hz100":   {Name: "ck_synack_hz100"},
+			"ck_child_created":  {Name: "ck_child_created"},
+		}}
+		for range 2 {
+			if err := selectCookieProducer(spec, period); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(spec.Programs) != 2 || spec.Programs["ck_synack_created"].Name != expected {
+			t.Fatalf("unexpected producer selection for %d: %v", period, spec.Programs)
+		}
+	}
+	spec := &ebpf.CollectionSpec{Programs: map[string]*ebpf.ProgramSpec{"ck_synack_created": {Name: "ck_synack_created"}}}
+	if err := selectCookieProducer(spec, 6000); err == nil {
+		t.Fatal("accepted the 1000 Hz producer for a 100 Hz kernel")
+	}
+	if err := selectCookieProducer(spec, 15000); err == nil {
+		t.Fatal("accepted an unreviewed epoch")
 	}
 }
 

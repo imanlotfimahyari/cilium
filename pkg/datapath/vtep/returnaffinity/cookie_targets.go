@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
+// This file was not reviewed by a human before submission
+
 package returnaffinity
 
 import (
@@ -8,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/cilium/ebpf"
@@ -21,18 +24,15 @@ func ConfigureCookieTargets(spec *ebpf.CollectionSpec) error {
 	if spec == nil {
 		return fmt.Errorf("missing cookie runtime")
 	}
-	if spec.Programs["ck_synack_created"] == nil && spec.Programs["ck_child_created"] == nil {
+	if spec.Programs["ck_synack_created"] == nil && spec.Programs["ck_child_created"] == nil &&
+		spec.Programs["ck_synack_hz100"] == nil {
 		return nil // Historical objects have no cookie forwarding.
 	}
-	var uts unix.Utsname
-	if err := unix.Uname(&uts); err != nil {
+	period, err := CookieEpochPeriod()
+	if err != nil {
 		return err
 	}
-	release := unix.ByteSliceToString(uts.Release[:])
-	if release != "6.8.0-31-generic" && release != "6.12.0-061200-generic" {
-		return fmt.Errorf("SYN-cookie timing is unreviewed for this kernel build")
-	}
-	if err := validateCookieKernelHZ(release); err != nil {
+	if err := selectCookieProducer(spec, period); err != nil {
 		return err
 	}
 	kernel, err := btf.LoadKernelSpec()
@@ -46,7 +46,65 @@ func ConfigureCookieTargets(spec *ebpf.CollectionSpec) error {
 	})
 }
 
-func validateCookieKernelHZ(release string) error {
+const cookieEpochSeconds = 60
+
+func reviewedCookieKernelHZ(release, machine string) (int, error) {
+	if machine == "x86_64" {
+		switch release {
+		case "6.8.0-31-generic", "6.12.0-061200-generic":
+			return 1000, nil
+		case "6.12.115-140.210.amzn2023.x86_64":
+			return 100, nil
+		}
+	}
+	return 0, fmt.Errorf("SYN-cookie timing is unreviewed for kernel %q (%q)", release, machine)
+}
+
+// CookieEpochPeriod returns an epoch in kernel jiffies, using the reviewed
+// running-kernel build and verifying the matching kernel configuration.
+func CookieEpochPeriod() (uint64, error) {
+	var uts unix.Utsname
+	if err := unix.Uname(&uts); err != nil {
+		return 0, err
+	}
+	release, machine := unix.ByteSliceToString(uts.Release[:]), unix.ByteSliceToString(uts.Machine[:])
+	hz, err := reviewedCookieKernelHZ(release, machine)
+	if err != nil {
+		return 0, err
+	}
+	if err := validateCookieKernelHZ(release, hz); err != nil {
+		return 0, err
+	}
+	return uint64(hz) * cookieEpochSeconds, nil
+}
+
+func selectCookieProducer(spec *ebpf.CollectionSpec, period uint64) error {
+	const primary = "ck_synack_created"
+	const hz100 = "ck_synack_hz100"
+	producer := spec.Programs[primary]
+	switch period {
+	case 6000:
+		if alternate := spec.Programs[hz100]; alternate != nil {
+			producer = alternate
+		}
+		if producer == nil || producer.Name != hz100 {
+			return fmt.Errorf("missing reviewed 100 Hz SYN-ACK producer")
+		}
+	case 60000:
+		if producer == nil || producer.Name == hz100 {
+			return fmt.Errorf("missing reviewed 1000 Hz SYN-ACK producer")
+		}
+	default:
+		return fmt.Errorf("unreviewed SYN-cookie epoch period %d", period)
+	}
+	// Preserve the logical name and pin path. The selected period is an
+	// instruction constant, so restoration checks it in the program tag.
+	spec.Programs[primary] = producer
+	delete(spec.Programs, hz100)
+	return nil
+}
+
+func validateCookieKernelHZ(release string, hz int) error {
 	f, err := os.Open("/proc/config.gz")
 	if err == nil {
 		defer f.Close()
@@ -55,7 +113,17 @@ func validateCookieKernelHZ(release string) error {
 			return fmt.Errorf("invalid kernel configuration: %w", err)
 		}
 		defer reader.Close()
-		return requireCookieHZ(reader)
+		return requireCookieHZ(reader, hz)
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	// AL2023 ships the config alongside the kernel in the mounted module
+	// tree, rather than in /proc or necessarily in the agent's /boot.
+	f, err = os.Open("/lib/modules/" + release + "/config")
+	if err == nil {
+		defer f.Close()
+		return requireCookieHZ(f, hz)
 	}
 	if !os.IsNotExist(err) {
 		return err
@@ -65,10 +133,10 @@ func validateCookieKernelHZ(release string) error {
 		return fmt.Errorf("cookie timing requires the running kernel configuration: %w", err)
 	}
 	defer f.Close()
-	return requireCookieHZ(f)
+	return requireCookieHZ(f, hz)
 }
 
-func requireCookieHZ(reader io.Reader) error {
+func requireCookieHZ(reader io.Reader, hz int) error {
 	const limit = 1 << 20
 	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
 	if err != nil {
@@ -77,13 +145,14 @@ func requireCookieHZ(reader io.Reader) error {
 	if len(data) > limit {
 		return fmt.Errorf("oversized kernel configuration")
 	}
+	expected := "CONFIG_HZ=" + strconv.Itoa(hz)
 	found := false
 	for line := range strings.SplitSeq(string(data), "\n") {
 		if !strings.HasPrefix(line, "CONFIG_HZ=") {
 			continue
 		}
-		if found || line != "CONFIG_HZ=1000" {
-			return fmt.Errorf("cookie timing requires exactly one CONFIG_HZ=1000")
+		if found || line != expected {
+			return fmt.Errorf("cookie timing requires exactly one %s", expected)
 		}
 		found = true
 	}
