@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
+// This file was not reviewed by a human before submission
+
 package live
 
 import (
@@ -184,6 +186,15 @@ func TestPrivilegedCookieIngressPolicyRejects(t *testing.T) {
 	}
 }
 
+func runningCookieEpochPeriod(t *testing.T) uint64 {
+	t.Helper()
+	period, err := returnaffinity.CookieEpochPeriod()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return period
+}
+
 func cookieClock(t *testing.T, f *handoffFixture) uint64 {
 	t.Helper()
 	ret, out, err := f.collection.Programs["handoff_cookie_clock"].Test(make([]byte, 64))
@@ -197,6 +208,7 @@ func TestPrivilegedCookieCollision(t *testing.T) {
 	for _, mapped := range []bool{false, true} {
 		t.Run(fmt.Sprintf("mapped=%v", mapped), func(t *testing.T) {
 			f, coll := cookieForwardingFixture(t, mapped)
+			period := runningCookieEpochPeriod(t)
 			client, server := f.connect(t, 0, 49220)
 			owner := f.owner(t, server)
 			fd, err := packetSocketProtocol(f.peerNS[0], f.peerVTEP[0], unix.ETH_P_ALL)
@@ -250,7 +262,7 @@ func TestPrivilegedCookieCollision(t *testing.T) {
 					quarantined = true
 					break
 				}
-				if cookieClock(t, f)/60000 == record.Epoch {
+				if cookieClock(t, f)/period == record.Epoch {
 					t.Fatal("same-epoch competing peer did not quarantine cookie")
 				}
 				t.Log("kernel cookie epoch changed between SYNs; using a fresh tuple for the collision precondition")
