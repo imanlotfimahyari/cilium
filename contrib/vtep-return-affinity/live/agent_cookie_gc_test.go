@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
+// This file was not reviewed by a human before submission
+
 package live
 
 import (
@@ -46,6 +48,7 @@ func verifyFreshAgentCookieGC(t *testing.T, f *handoffFixture, agent *agentProce
 	graph := snapshotAgentAffinity(t, pins)
 	statsBefore := openAgentCookieStats(t, pins)
 	receivedBefore := cookieCounter(t, f.podNS, "SyncookiesRecv")
+	period := runningCookieEpochPeriod(t)
 	started := now()
 	var clients, servers [2]*net.TCPConn
 	savedOwners := make([]handoffOwner, len(existing)+2)
@@ -75,7 +78,7 @@ func verifyFreshAgentCookieGC(t *testing.T, f *handoffFixture, agent *agentProce
 			i = 1
 		}
 		owner := savedOwners[len(existing)+i]
-		if key.Generation != f.cookie || key.Local != wireIP(f.pod.ip) || key.LocalPort != wire16(8080) || key.Reserved != 0 || record.State != 2 || record.Peer != owner.Peer || owner.Peer != wireIP(f.under[i].ip) || record.Epoch < started/60000 || record.Expires != (record.Epoch+2)*60000 {
+		if key.Generation != f.cookie || key.Local != wireIP(f.pod.ip) || key.LocalPort != wire16(8080) || key.Reserved != 0 || record.State != 2 || record.Peer != owner.Peer || owner.Peer != wireIP(f.under[i].ip) || record.Epoch < started/period || record.Expires != (record.Epoch+2)*period {
 			t.Fatal("fresh ledger record does not match its real consumed cookie/peer")
 		}
 		saved[key] = record
@@ -85,7 +88,7 @@ func verifyFreshAgentCookieGC(t *testing.T, f *handoffFixture, agent *agentProce
 	}
 	observed := now()
 	for _, record := range saved {
-		if record.Expires <= observed || record.Expires-observed < 50000 {
+		if record.Expires <= observed || record.Expires-observed < period*50/60 {
 			t.Fatal("record was already near expiry; no fresh-window proof")
 		}
 	}
@@ -122,7 +125,7 @@ func verifyFreshAgentCookieGC(t *testing.T, f *handoffFixture, agent *agentProce
 			} else if err != nil || actual != original {
 				t.Fatal("GC changed or recreated an immutable cookie record", err)
 			}
-			if sampled > original.Expires+15000 && err == nil {
+			if sampled > original.Expires+period*15/60 && err == nil {
 				t.Fatal("running agent did not collect the expired cookie record within three GC intervals")
 			}
 		}
