@@ -1,3 +1,4 @@
+/* This file was not reviewed by a human before submission */
 /* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 /* Copyright Authors of Cilium */
 #pragma once
@@ -5,9 +6,6 @@
 #include "vtep_return_socket.h"
 #define VTEP_COOKIE_LEDGER_CAPACITY VTEP_SOCKET_MAX_TICKETS
 #include "vtep_return_cookie_ledger.h"
-
-/* Loader requires the reviewed CONFIG_HZ=1000, never a timing estimate. */
-#define VTEP_COOKIE_PERIOD 60000ULL
 
 struct vtep_cookie_ack {
 	struct cookie_peer_key key;

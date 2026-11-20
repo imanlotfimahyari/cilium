@@ -1,3 +1,4 @@
+/* This file was not reviewed by a human before submission */
 /* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 /* Copyright Authors of Cilium */
 #pragma once
@@ -16,8 +17,7 @@ struct tcp_sock { __u32 rcv_nxt, snd_una; } __attribute__((preserve_access_index
  * The loader checks the six-argument ABI and enum TCP_SYNACK_COOKIE=2.
  * Cookie skbs intentionally have no request socket attached. Do not guess one.
  */
-__section("fexit/tcp_make_synack")
-int ck_synack_created(__u64 *ctx)
+static __always_inline int ck_synack_with_period(__u64 *ctx, __u64 period)
 {
 	struct sock *listener = (void *)ctx[0];
 	struct sk_buff *syn = (void *)ctx[5], *packet = (void *)ctx[6];
@@ -66,7 +66,7 @@ int ck_synack_created(__u64 *ctx)
 	association.key.remote_port = tcp.dest;
 	association.key.client_isn = bpf_ntohl(headers.tcp.seq);
 	association.key.server_isn = bpf_ntohl(tcp.seq);
-	if (!cookie_peer_issue(&association.key, ticket->peer, jiffies64(), VTEP_COOKIE_PERIOD))
+	if (!cookie_peer_issue(&association.key, ticket->peer, jiffies64(), period))
 		goto reject;
 	if (map_update_elem(&ck_output_packet, &identity, &association, BPF_NOEXIST)) {
 		/* A stale pointer collision must invalidate, never authorize a reuse. */
@@ -82,6 +82,21 @@ reject:
 	if (stats)
 		__sync_fetch_and_add(&stats->rejected, 1);
 	return 0; /* No packet association: the pre-queue guard drops the SYN-ACK. */
+}
+
+/* Load exactly one producer. Keep the selected period in the instructions
+ * so pinned-link restoration can verify it without any new runtime maps.
+ */
+__section("fexit/tcp_make_synack")
+int ck_synack_created(__u64 *ctx)
+{
+	return ck_synack_with_period(ctx, 60000ULL);
+}
+
+__section("fexit/tcp_make_synack")
+int ck_synack_hz100(__u64 *ctx)
+{
+	return ck_synack_with_period(ctx, 6000ULL);
 }
 
 /* Kernel has already validated the cookie and returned the actual child.
