@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 # Copyright Authors of Cilium
+# This file was not reviewed by a human before submission
 
 """Run isolated privileged BPF tests in a network-disconnected QEMU/TCG guest.
 
@@ -193,6 +194,13 @@ def main():
     for name in requested:
         add_module(name)
 
+    # Amazon packages vmlinuz and config together under lib/modules. Keep
+    # that layout in the guest so the agent exercises the production lookup.
+    module_config = bool(
+        args.module_root and args.kernel_config
+        and args.kernel.resolve() == (args.module_root / "vmlinuz").resolve()
+        and args.kernel_config.resolve() == (args.module_root / "config").resolve()
+    )
     init = """#!/bin/sh
 /bin/busybox --install -s /bin
 mount -t proc proc /proc
@@ -205,6 +213,7 @@ mount -t cgroup2 cgroup2 /sys/fs/cgroup
 mount -t cgroup2 cgroup2 /run/cilium/cgroupv2
 hostname vtep-lab
 ip link set lo up
+__MODULE_CONFIG__
 __RECOVERY_MOUNT__
 for name in __VM_MODULES__; do
   [ ! -f "/modules/$name.ko" ] || insmod "/modules/$name.ko"
@@ -280,6 +289,12 @@ poweroff -f
     init = init.replace("__VM_MODULES__", " ".join(modules)).replace("__LIVE_TEST_RUN__", shlex.quote(args.live_test_run))
     init = init.replace("__AGENT_TEST_RUN__", shlex.quote(args.agent_test_run))
     init = init.replace("__PREVIOUS_AGENT_MODE__", shlex.quote(args.previous_agent_mode))
+    init = init.replace("__MODULE_CONFIG__", (
+        'release="$(uname -r)"\n'
+        '[ "$release" = ' + shlex.quote(args.module_root.name) +
+        ' ] && mkdir -p "/lib/modules/$release" && cp /kernel-config "/lib/modules/$release/config"'
+        ' || { echo VTEP_VM_EXIT=1; poweroff -f; }'
+    ) if module_config else "")
     init = init.replace("__RECOVERY_MOUNT__", (
         "mkdir -p /recovery\nmount -t ext4 /dev/vda /recovery || { echo VTEP_VM_EXIT=1; poweroff -f; }\n"
         "export VTEP_RETURN_RECOVERY_STAGE=" + shlex.quote(args.recovery_stage)
@@ -318,9 +333,12 @@ poweroff -f
                 if candidate.is_file():
                     kernel_config = candidate
             if kernel_config is not None:
-                release = args.kernel.name.removeprefix("vmlinuz-")
-                out.write(entry("boot", stat.S_IFDIR | 0o755))
-                out.write(entry("boot/config-" + release, stat.S_IFREG | 0o644, kernel_config.read_bytes()))
+                if module_config:
+                    out.write(entry("kernel-config", stat.S_IFREG | 0o644, kernel_config.read_bytes()))
+                else:
+                    release = args.kernel.name.removeprefix("vmlinuz-")
+                    out.write(entry("boot", stat.S_IFDIR | 0o755))
+                    out.write(entry("boot/config-" + release, stat.S_IFREG | 0o644, kernel_config.read_bytes()))
             if args.core_object:
                 out.write(entry("socket_core.o", stat.S_IFREG | 0o644, args.core_object.read_bytes()))
             if args.timewait_core_object:
