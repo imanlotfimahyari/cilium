@@ -34,9 +34,11 @@ managed by the agent's canonical bundle.
 The v24 packet fixtures exercise real forced-cookie VXLAN handshakes through
 normal Cilium policy/CT, both listener families, exact child publication,
 replay/collision, expiry and pressure. v25-v29 add managed runtime lifecycle and
-real agent periodic collection on the reviewed kernels. These reports do not
-establish AL2023 support, ordinary native SYN-cookie forwarding or EKS execution.
-The authoritative distinction is in [SUPPORT.md](SUPPORT.md).
+real agent periodic collection on the two Ubuntu builds.
+[VALIDATION-AL2023.md](VALIDATION-AL2023.md) records the separate 100 Hz port.
+The exact AL2023 build uses the same 60-second cookie epoch, with 6,000 instead
+of 60,000 jiffies. The loader installs a single reviewed producer and keeps
+the same map and hook layout. See [SUPPORT.md](SUPPORT.md) for the remaining limits.
 
 The kernel uses cookies to avoid retaining request state while this feature
 retains bounded peer evidence. SYN-flood availability, memory and native
