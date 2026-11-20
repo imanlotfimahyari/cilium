@@ -18,6 +18,10 @@ Git history. [Refreshed-main checks](VALIDATION-main-20261106.md) document this
 integration. Last full-daemon VM evidence is [v29](VALIDATION-v29.md), not a new
 Kubernetes or native performance result. This is a personal-fork lab experiment.
 
+[Tenant edge reference](tenant-edge/README.md): separate the TCP listeners
+before packets reach the shared Cilium datapath when tenant tuples can overlap.
+This deployment option is separate from the affinity feature.
+
 ## Install and configure
 
 Use the fork's standard chart under `install/kubernetes/cilium`, with full
@@ -26,8 +30,9 @@ Use the fork's standard chart under `install/kubernetes/cilium`, with full
 fields. See [the packaged EKS/VTEP example](../../install/kubernetes/cilium/examples/values-eks-vtep-affinity.yaml)
 and [source image/chart build commands](../../install/kubernetes/cilium/examples/INSTALL-VTEP.md).
 
-Use the exact target-kernel requirements and remaining AL2023 blocker in
-[SUPPORT.md](SUPPORT.md). A chart render cannot establish kernel compatibility.
+Use the exact kernel requirements in [SUPPORT.md](SUPPORT.md). The named AL2023
+build has isolated VM evidence; a chart render or that VM run does not establish
+EKS/CNI compatibility.
 Newly created eligible endpoints opt in; existing pods need recreation.
 The value is startup-only and the chart retains `rollOutCiliumPods=false`.
 Physically drain selected pods before disabling, changing peers or rolling back.
