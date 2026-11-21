@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
+// This file was not reviewed by a human before submission
 
 package loader
 
@@ -27,12 +28,16 @@ func (l *loader) initializeVTEPReturn(ctx context.Context, cfg *config.Config, t
 	if !l.affinity.Enabled() {
 		return l.affinity.InitializeRuntime(nil)
 	}
+	protocol := tc.EncapProtocol()
 	if !option.Config.EnableVTEP || !option.Config.EnableIPv4 || option.Config.EnableIPv6 ||
 		option.Config.DatapathMode != "veth" || !option.Config.EnableTCX ||
 		option.Config.UnsafeDaemonConfigOption.EnableHostLegacyRouting || option.Config.EnableL7Proxy ||
 		option.Config.EnableEndpointRoutes || cfg.EnableIPSec || cfg.EnableWireguard ||
-		tc.EncapProtocol() != tunnel.VXLAN || tc.UnderlayProtocol() == tunnel.IPv6 {
-		return fmt.Errorf("experimental VTEP return affinity requires IPv4-only VXLAN/veth with TCX and BPF host routing; endpoint routes, proxies and encryption are unsupported")
+		(protocol != tunnel.VXLAN && protocol != tunnel.Geneve) || tc.UnderlayProtocol() == tunnel.IPv6 {
+		return fmt.Errorf("experimental VTEP return affinity requires IPv4-only VXLAN or Geneve with veth with TCX and BPF host routing; endpoint routes, proxies and encryption are unsupported")
+	}
+	if protocol == tunnel.Geneve && cfg.LBConfig.DSRConfig.Enable {
+		return fmt.Errorf("experimental VTEP return affinity over Geneve requires DSR to be disabled")
 	}
 	const source, object = "bpf_vtep_return.c", "bpf_vtep_return.o"
 	if err := compileDefault(ctx, l.logger, source, object); err != nil {

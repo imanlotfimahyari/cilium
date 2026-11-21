@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 # Copyright Authors of Cilium
 # This file was not reviewed by a human before submission
+# This file was not reviewed by a human before submission
 
 """Run isolated privileged BPF tests in a network-disconnected QEMU/TCG guest.
 
@@ -170,7 +171,7 @@ def main():
 
     # Resolve actual .modinfo dependencies before packaging. The agent opens
     # routing, XFRM and netfilter netlink families even when encryption is off.
-    requested = ["udp_tunnel", "ip6_udp_tunnel", "veth", "cls_bpf", "sch_ingress", "sch_netem", "act_bpf", "vxlan"]
+    requested = ["udp_tunnel", "ip6_udp_tunnel", "veth", "cls_bpf", "sch_ingress", "sch_netem", "act_bpf", "vxlan", "geneve"]
     if args.full_agent:
         requested += ["inet_diag", "tcp_diag", "udp_diag", "netlink_diag", "unix_diag", "nfnetlink", "xfrm_user", "nf_conntrack_netlink"]
         requested += ["ip_tables", "iptable_filter", "iptable_mangle", "iptable_raw", "iptable_nat", "iptable_security", "ip6_tables", "ip6table_filter", "ip6table_mangle", "ip6table_raw", "ip6table_nat", "ip6table_security",

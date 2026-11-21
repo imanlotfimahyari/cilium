@@ -74,6 +74,11 @@ type handoffFixture struct {
 
 func newHandoffNetwork(t *testing.T) *handoffFixture {
 	t.Helper()
+	return newHandoffNetworkWithTunnel(t, false)
+}
+
+func newHandoffNetworkWithTunnel(t *testing.T, geneve bool) *handoffFixture {
+	t.Helper()
 	f := &handoffFixture{rootTest: t, cleanup: t.Cleanup, attachments: make(map[string]link.Link), router: testns.NewNetNS(t), podNS: testns.NewNetNS(t),
 		nativeNS: testns.NewNetNS(t), peerNS: [2]*netns.NetNS{testns.NewNetNS(t), testns.NewNetNS(t)}}
 	err := f.router.Do(func() error {
@@ -98,7 +103,12 @@ func newHandoffNetwork(t *testing.T) *handoffFixture {
 				return err
 			}
 		}
-		if err := netlink.LinkAdd(&netlink.Vxlan{LinkAttrs: netlink.LinkAttrs{Name: "h-vtep"}, FlowBased: true, Port: 8472}); err != nil {
+		attrs := netlink.LinkAttrs{Name: "h-vtep"}
+		var tunnel netlink.Link = &netlink.Vxlan{LinkAttrs: attrs, FlowBased: true, Port: 8472}
+		if geneve {
+			tunnel = &netlink.Geneve{LinkAttrs: attrs, FlowBased: true, Dport: 6081}
+		}
+		if err := netlink.LinkAdd(tunnel); err != nil {
 			return err
 		}
 		f.nodeVTEP, err = netlink.LinkByName("h-vtep")
@@ -116,10 +126,14 @@ func newHandoffNetwork(t *testing.T) *handoffFixture {
 	for i, ns := range f.peerNS {
 		if err := ns.Do(func() error {
 			remote := []string{"192.0.2.1", "192.0.2.5"}[i]
-			vxlan := &netlink.Vxlan{LinkAttrs: netlink.LinkAttrs{Name: "h-peer-vtep"}, VxlanId: 2,
+			attrs := netlink.LinkAttrs{Name: "h-peer-vtep"}
+			var tunnel netlink.Link = &netlink.Vxlan{LinkAttrs: attrs, VxlanId: 2,
 				VtepDevIndex: f.under[i].remote.Attrs().Index, SrcAddr: f.under[i].ip,
 				Group: net.ParseIP(remote), Port: 8472}
-			if err := netlink.LinkAdd(vxlan); err != nil {
+			if geneve {
+				tunnel = &netlink.Geneve{LinkAttrs: attrs, ID: 2, Remote: net.ParseIP(remote), Dport: 6081}
+			}
+			if err := netlink.LinkAdd(tunnel); err != nil {
 				return err
 			}
 			var err error
@@ -173,7 +187,12 @@ func newHandoffFixture(t *testing.T, object string) *handoffFixture {
 
 func newHandoffListenerFixture(t *testing.T, object string, mapped bool) *handoffFixture {
 	t.Helper()
-	f := newHandoffNetwork(t)
+	return newHandoffListenerFixtureWithTunnel(t, object, mapped, false)
+}
+
+func newHandoffListenerFixtureWithTunnel(t *testing.T, object string, mapped, geneve bool) *handoffFixture {
+	t.Helper()
+	f := newHandoffNetworkWithTunnel(t, geneve)
 	spec, err := ebpf.LoadCollectionSpec(object)
 	if err != nil {
 		t.Fatal(err)
@@ -194,13 +213,17 @@ func newHandoffListenerFixture(t *testing.T, object string, mapped bool) *handof
 	if f.core {
 		var address [4]byte
 		var routerMAC [8]byte
+		tunnelProtocol := uint8(1) // TUNNEL_PROTOCOL_VXLAN
+		if geneve {
+			tunnelProtocol = 2 // TUNNEL_PROTOCOL_GENEVE
+		}
 		copy(address[:], f.pod.ip.To4())
 		copy(routerMAC[:], f.pod.host.Attrs().HardwareAddr)
 		for name, value := range map[string]any{
 			"endpoint_netns_cookie": f.cookie, "endpoint_ipv4": address,
 			"interface_ifindex": uint32(f.pod.host.Attrs().Index), "interface_mac": routerMAC,
 			"enable_vtep": true, "enable_bpf_routing": true, "enable_bpf_host_routing": true,
-			"tunnel_protocol": uint8(1),
+			"tunnel_protocol": tunnelProtocol,
 			"security_label":  uint32(1234),
 			"vtep_mask":       wireIP(net.ParseIP("255.255.255.0")),
 		} {
@@ -408,6 +431,23 @@ func (f *handoffFixture) policy(t *testing.T, port uint32, flags uint32) {
 	if err := f.collection.Maps["handoff_policy"].Update(port, flags, ebpf.UpdateAny); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestPrivilegedGeneveReturnAffinity(t *testing.T) {
+	f := newHandoffListenerFixtureWithTunnel(t, tcpModeObject(t, "VTEP_RETURN_CORE_OBJECT"), false, true)
+	if !f.core {
+		t.Fatal("the supplied object does not contain Cilium endpoint entrypoints")
+	}
+	aClient, aServer := f.connect(t, 0, 46000)
+	bClient, bServer := f.connect(t, 1, 46001)
+	for i, server := range []*net.TCPConn{aServer, bServer} {
+		if owner := f.owner(t, server); owner.Origin != 2 || owner.Peer != wireIP(f.under[i].ip) {
+			t.Fatalf("connection %d acquired the wrong Geneve peer", i)
+		}
+	}
+	transferHandoff(t, aClient, aServer, "geneve-peer-A")
+	transferHandoff(t, bClient, bServer, "geneve-peer-B")
+	f.noPending(t)
 }
 
 func TestPrivilegedCiliumCoreHandoff(t *testing.T) {

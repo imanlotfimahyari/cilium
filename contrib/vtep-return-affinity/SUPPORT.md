@@ -18,6 +18,7 @@ This remains an experimental, default-off personal-fork feature.
 | Capability | Implementation | Validation boundary |
 | --- | --- | --- |
 | External-peer connection-specific IPv4/TCP return path | Present; immutable socket-owned peer, normal Cilium policy/CT ordering | Isolated on the two reviewed Ubuntu kernels and the exact AL2023 kernel; cluster validation is pending |
+| Direct-pod IPv4/TCP over Geneve | Uses the same exact peer and VNI checks on the Geneve overlay with DSR disabled | Two-peer Linux Geneve fixture passed on Debian 6.12.117; BIG-IP and Kubernetes validation pending |
 | AF_INET and AF_INET6 listeners accepting IPv4 | Present; both mapped addresses checked against kernel IPv4 fields | Tested in isolated fixtures; IPv6 forwarding is outside scope |
 | TIME-WAIT pure IPv4 ACK replies | Present; exact socket-incarnation transfer and one-time packet proof | Tested with queued ACKs, tuple reuse, policy/CT, duplicates and GC under the reviewed buffering contract |
 | Trusted external VXLAN SYN cookies | Present; SYN/SYN-ACK/ACK evidence binds the exact kernel-created child | Earlier lifecycle/pressure evidence at v24-v29; exact AL2023 forced-cookie IPv4 and IPv4-mapped IPv6 fixtures also pass |
@@ -40,10 +41,10 @@ respective checkpoints.
 | Kernel/architecture | x86_64 only: exact Ubuntu builds `6.8.0-31-generic`, `6.12.0-061200-generic`, and AL2023 build `6.12.115-140.210.amzn2023.x86_64`; cgroup v2, BTF/fentry/fexit and required BPF helpers |
 | SYN-cookie timing | Exactly `CONFIG_HZ=1000` on the two Ubuntu builds and `CONFIG_HZ=100` on the named AL2023 build; expected BTF signatures and config from `/proc/config.gz`, `/lib/modules/<release>/config` or `/boot/config-<release>` |
 | AL2023 | The exact build listed here passed isolated kernel/controller/packet and full-daemon lifecycle validation; no EKS/CNI execution, no blanket AL2023 support |
-| Datapath | IPv4 TCP, VXLAN over IPv4, veth/TCX, BPF host routing, kube-proxy replacement, direct pod connections |
+| Datapath | Direct-pod IPv4/TCP, VXLAN or Geneve over IPv4, veth/TCX, BPF host routing and kube-proxy replacement; disable DSR with Geneve |
 | Selection | Newly created eligible synchronous CNI endpoints; recreate existing pods to opt in; install hooks before listening |
-| Peers | Exact configured outer IP/VXLAN MAC pairs; client ranges separate from node/pod/Service ranges; underlay must enforce trusted origins |
-| Configuration lifecycle | Startup-only flag; explicit agent rollout; peers frozen while active; physically drain selected pods before disable/reconfiguration/rollback |
+| Peers | Exact configured outer IP/tunnel MAC pairs; client ranges separate from node/pod/Service ranges; underlay must enforce trusted origins |
+| Configuration lifecycle | Startup-only flag; explicit agent rollout; peers frozen while active; physically drain selected pods before disable, tunnel protocol changes, peer reconfiguration or rollback |
 | State compatibility | Canonical map schema 3 and journal format 2; restore requires compatible map IDs/program tags/hooks/boot/history; incomplete state refuses readiness |
 
 Exact peer matching is not cryptographic authentication. Return affinity does
@@ -53,7 +54,7 @@ not provide tenant isolation or separate policy identities per external peer.
 
 | Area | Limit |
 | --- | --- |
-| Network integrations | Services/NAT translations, Geneve, netkit, endpoint routes, IPv6, IPsec/WireGuard, proxies/ztunnel and peer failover |
+| Network integrations | Services/NAT translations, Geneve DSR, netkit, endpoint routes, IPv6, IPsec/WireGuard, proxies/ztunnel and peer failover |
 | TCP paths | Native/ordinary-cluster SYN-cookie handshakes, SYN payload/TFO and general socketless data/reset replies |
 | Packet forms/buffering | IP options/fragments and arbitrary neighbor buffering/cloning/offload combinations outside the reviewed proof path |
 | Tuple isolation | Simultaneous identical TCP tuples in one network namespace cannot receive independent peer ownership; demonstrations use distinguishable tuples |

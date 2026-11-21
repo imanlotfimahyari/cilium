@@ -12,10 +12,17 @@
 #include "vtep_return_timewait.h"
 #endif
 
+static __always_inline bool vtep_core_enabled4(void)
+{
+	return CONFIG(enable_vtep) && CONFIG(enable_bpf_routing) &&
+	       (CONFIG(tunnel_protocol) == TUNNEL_PROTOCOL_VXLAN ||
+		(CONFIG(tunnel_protocol) == TUNNEL_PROTOCOL_GENEVE && !CONFIG(dsr_cfg).enable));
+}
+
 /* Integration for selected direct-veth IPv4/TCP endpoints. The experimental
  * agent controller installs sockops and pre-queue attachments before publishing
  * namespace readiness and completing synchronous CNI ADD.
- * Do not combine with a proxy, service translation or a different tunnel.
+ * Direct pod traffic uses the configured VXLAN or Geneve overlay.
  */
 static __always_inline int
 vtep_core_admit4(struct __ctx_buff *ctx, bool from_tunnel, __u32 source_identity, __u16 proxy_port,
@@ -41,8 +48,7 @@ vtep_core_admit4(struct __ctx_buff *ctx, bool from_tunnel, __u32 source_identity
 	if ((!tcp.syn || tcp.ack) && (!tcp.ack || tcp.syn || tcp.rst || tcp.fin))
 		return CTX_ACT_OK;
 #endif
-	if (!CONFIG(enable_vtep) || CONFIG(tunnel_protocol) != TUNNEL_PROTOCOL_VXLAN ||
-	    !CONFIG(enable_bpf_routing) || proxy_port || translated ||
+	if (!vtep_core_enabled4() || proxy_port || translated ||
 	    tc_index_from_ingress_proxy(ctx) || tc_index_from_egress_proxy(ctx))
 		return DROP_INVALID;
 	if (from_tunnel) {
@@ -58,7 +64,7 @@ vtep_core_admit4(struct __ctx_buff *ctx, bool from_tunnel, __u32 source_identity
 		} else {
 			const struct remote_endpoint_info *info;
 
-			/* Ordinary inter-node pod traffic also arrives through VXLAN.
+			/* Ordinary inter-node pod traffic also arrives through the overlay.
 			 * Only the authoritative IP cache may classify it as native:
 			 * require source address, identity, VNI and exact node peer to
 			 * agree. An unknown WORLD tunnel never acquires native status.
@@ -87,42 +93,49 @@ vtep_core_admit4(struct __ctx_buff *ctx, bool from_tunnel, __u32 source_identity
 	return CTX_ACT_OK;
 }
 
-/* Called after normal egress policy/CT processing, before any prefix-based
- * forwarding. Native ownership continues through ordinary Cilium routing.
- * Unknown ownership cannot fall back to the existing client-prefix VTEP map.
+/* Resolve ownership against the socket-side packet before any address or
+ * port rewrite. On success, a zero peer denotes native ownership. Flow
+ * admission still depends on the normal policy and conntrack verdicts.
  */
 static __always_inline int
-vtep_core_reply4(struct __ctx_buff *ctx, struct trace_ctx *trace)
+vtep_core_reply_peer4(struct __ctx_buff *ctx, __be32 *peer)
 {
-	struct remote_endpoint_info info = {};
-	const struct vtep_socket_peer *destination;
-	union macaddr source = CONFIG(interface_mac);
-	__be32 peer = 0;
 	int action;
 
-	if (!CONFIG(enable_vtep) || CONFIG(tunnel_protocol) != TUNNEL_PROTOCOL_VXLAN ||
-	    !CONFIG(enable_bpf_routing))
+	*peer = 0;
+	if (!vtep_core_enabled4())
 		return DROP_INVALID;
 #ifdef ENABLE_VTEP_RETURN_TIMEWAIT_AFFINITY
 	{
 		bool claimed;
 
-		action = vtep_timewait_reply4(ctx, CONFIG(endpoint_netns_cookie), &peer, &claimed);
+		action = vtep_timewait_reply4(ctx, CONFIG(endpoint_netns_cookie), peer, &claimed);
 		if (!claimed)
-			action = vtep_socket_reply4(ctx, CONFIG(endpoint_netns_cookie), true, &peer);
+			action = vtep_socket_reply4(ctx, CONFIG(endpoint_netns_cookie), true, peer);
 	}
 #else
-	action = vtep_socket_reply4(ctx, CONFIG(endpoint_netns_cookie), true, &peer);
+	action = vtep_socket_reply4(ctx, CONFIG(endpoint_netns_cookie), true, peer);
 #endif
 #ifdef ENABLE_VTEP_RETURN_COOKIE_AFFINITY
 	if (action == VTEP_SOCKET_DROP)
-		action = vtep_cookie_reply4(ctx, CONFIG(endpoint_netns_cookie), &peer, true);
+		action = vtep_cookie_reply4(ctx, CONFIG(endpoint_netns_cookie), peer, true);
 #endif
-	if (action == VTEP_SOCKET_DROP)
-		return DROP_INVALID;
+	return action == VTEP_SOCKET_DROP ? DROP_INVALID : CTX_ACT_OK;
+}
+
+/* Encapsulation uses the proven peer. Native connections continue through
+ * ordinary Cilium routing, and failed ownership proofs never reach here.
+ */
+static __always_inline int
+vtep_core_forward_reply4(struct __ctx_buff *ctx, struct trace_ctx *trace, __be32 peer)
+{
+	struct remote_endpoint_info info = {};
+	const struct vtep_socket_peer *destination;
+	union macaddr source = CONFIG(interface_mac);
+
 	if (eth_store_saddr(ctx, source.addr, 0) < 0)
 		return DROP_WRITE_ERROR;
-	if (action == VTEP_SOCKET_PASS)
+	if (!peer)
 		return CTX_ACT_OK;
 	destination = map_lookup_elem(&cilium_vtep_peers4, &peer);
 	if (!destination)
@@ -134,4 +147,17 @@ vtep_core_reply4(struct __ctx_buff *ctx, struct trace_ctx *trace)
 	return __encap_and_redirect_with_nodeid(ctx, &info, SECLABEL_IPV4,
 					      world_ipv4_id(), world_ipv4_id(), trace,
 					      bpf_htons(ETH_P_IP));
+}
+
+static __always_inline int
+vtep_core_reply4(struct __ctx_buff *ctx, struct trace_ctx *trace)
+{
+	__be32 peer;
+	int ret;
+
+	ret = vtep_core_reply_peer4(ctx, &peer);
+	if (IS_ERR(ret))
+		return ret;
+
+	return vtep_core_forward_reply4(ctx, trace, peer);
 }

@@ -71,9 +71,20 @@ class HelmAffinityTests(unittest.TestCase):
         self.assertEqual(text.count(FLAG+":"), 1)
         self.assertEqual(yaml.safe_load(text)["data"][FLAG], "true")
 
+    def test_geneve_ipv4_requires_snat_mode(self):
+        values = self.enabled()
+        values["tunnelProtocol"] = "geneve"
+        config = yaml.safe_load(self.render(values).stdout)["data"]
+        self.assertEqual(config["tunnel-protocol"], "geneve")
+        self.assertEqual(config[FLAG], "true")
+        for changes in [{"loadBalancer": {"mode": "dsr"}}, {"bpf": {"lbModeAnnotation": True}}]:
+            result = self.render(values | changes, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires DSR to be disabled", result.stderr)
+
     def test_unsupported_combinations_fail_before_installation(self):
         cases = [("vtep", "enabled", False), ("ipv4", "enabled", False), ("ipv6", "enabled", True),
-                 (None, "routingMode", "native"), (None, "tunnelProtocol", "geneve"),
+                 (None, "routingMode", "native"),
                  (None, "underlayProtocol", "ipv6"), ("bpf", "datapathMode", "netkit"),
                  ("bpf", "enableTCX", False), ("bpf", "hostLegacyRouting", True),
                  (None, "kubeProxyReplacement", False), (None, "l7Proxy", True),

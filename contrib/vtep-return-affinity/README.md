@@ -1,6 +1,6 @@
 <!-- This file was not reviewed by a human before submission -->
 
-# Experimental IPv4/TCP VXLAN return affinity
+# Experimental IPv4/TCP tunnel return affinity
 
 The forwarding and agent lifecycle implementation is present behind the
 startup-only, default-off `vtep.experimentalReturnAffinity.enabled` Helm value.
@@ -29,6 +29,11 @@ Use the fork's standard chart under `install/kubernetes/cilium`, with full
 `vtep.experimentalReturnAffinity.enabled`; exact peers use the existing VTEP
 fields. See [the packaged EKS/VTEP example](../../install/kubernetes/cilium/examples/values-eks-vtep-affinity.yaml)
 and [source image/chart build commands](../../install/kubernetes/cilium/examples/INSTALL-VTEP.md).
+
+For direct-pod Geneve, set `tunnelProtocol: geneve` and match the external
+peer's Geneve UDP port and world VNI (2). Keep DSR disabled. Drain selected
+pods before switching protocols. The live fixture exercises two Linux
+Geneve peers using real kernel tunnel metadata and Cilium endpoint programs.
 
 Use the exact kernel requirements in [SUPPORT.md](SUPPORT.md). The named AL2023
 build has isolated VM evidence; a chart render or that VM run does not establish
